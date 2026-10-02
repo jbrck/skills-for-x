@@ -8,6 +8,8 @@ Standalone tools for mining X/Twitter's full archive via the [@steipete/bird](ht
 |-------|-------------|
 | [seed-post](seed-post/) | Find the first-ever mention of any phrase on X — binary-chop archive search + growth timeline |
 
+![seed-post card](seed-post/card.svg)
+
 ## Requirements
 
 - **Node.js >= 20** (for `@steipete/bird` — the bird CLI hits X's internal GraphQL API)
