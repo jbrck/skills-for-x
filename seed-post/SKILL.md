@@ -166,20 +166,6 @@ python3 scripts/seed-post.py "bitcoin" --graph --annual
 
 Early years show the real count. Once mentions far exceed what X returns per query, the table collapses the saturated years into a single row with a "+" label. The script still queries every window — the display just trims the repeats for readability.
 
-```
-────────────────────────────────────────────────────────────
-  GROWTH TIMELINE (mentions over time)
-────────────────────────────────────────────────────────────
-
-  | Counts | Bars | Notes |
-|--------|------|-------|
-| 1 | ██ | Week 1 (Jan 11-18, 2009) — @halfin's original post |
-| 0 | | Week 2 — no mentions |
-| 0 | | Remainder of Month 1 |
-| 3 | ██████ | Month 2 — first murmurs |
-| 12 | ████████████████████████ | Month 3 — the spark catches |
-```
-
 #### Get raw JSON
 
 ```bash
