@@ -137,7 +137,34 @@ python3 scripts/seed-post.py "bitcoin" --graph
 
 Shows the OG post + a bar chart of mention activity across time windows. For a 17-year-old term like "bitcoin", the growth scan reveals how the conversation evolved from @halfin's single post to today's millions of mentions.
 
-The growth output uses a default window schedule — week 1, week 2, remainder of month 1, then month 2, month 3. Use `--window` to control the window size:
+The growth output uses a default window schedule — week 1, week 2, remainder of month 1, then month 2, month 3. Use `--window` to control the window size.
+
+#### Annual growth view
+
+For long-running terms, `--annual` shows each calendar year as a window:
+
+```bash
+python3 scripts/seed-post.py "bitcoin" --graph --annual
+```
+
+```
+────────────────────────────────────────────────────────────
+  GROWTH TIMELINE (mentions over time)
+────────────────────────────────────────────────────────────
+
+  Year   Date Range                 Count
+  ─────────────────────────────────────────────────────────
+
+  2009   Jan 11 - Dec 31               3  
+  2010   Jan 1 - Dec 31                3  
+  2011+  2011 onward                  40  ████████████████████████████████████████
+
+  (13 years with 40+ posts collapsed into 1 row — API sample cap reached)
+
+  (bar width = 40 posts = 40 chars)
+```
+
+Early years show the real count. Once mentions far exceed what X returns per query, the table collapses the saturated years into a single row with a "+" label. The script still queries every window — the display just trims the repeats for readability.
 
 ```
 ────────────────────────────────────────────────────────────

@@ -400,21 +400,59 @@ def format_og_post(tweet: dict) -> str:
 
 
 def format_growth(windows: list) -> str:
+    """Format growth data as a table with header, bars and counts.
+
+    Collapses consecutive windows with the same count into a single
+    "YYYY+" row for readability (mostly affects annual scans on
+    popular terms where the API sample cap is reached).
+    """
     if not windows:
         return ""
+
     max_count = max(w["count"] for w in windows)
     bar_width = 40
     scale = bar_width / max_count if max_count > 0 else 1
     lines = ["", "─" * 60, "  GROWTH TIMELINE (mentions over time)",
              "─" * 60, "",
-             "  Window                    Date Range            Count",
-             "  " + "─" * 54, ""]
-    for w in windows:
+             "  Year   Date Range                 Count",
+             "  " + "─" * 52, ""]
+
+    # Collapse runs of 3+ consecutive windows with the same count
+    display = []
+    i = 0
+    while i < len(windows):
+        w = windows[i]
         count = w["count"]
+        run = 1
+        while i + run < len(windows) and windows[i + run]["count"] == count:
+            run += 1
+        if run >= 3:
+            first = windows[i]
+            last = windows[i + run - 1]
+            collapsed = f"{first['label']}+"
+            dr = first.get("date_range", "").split(" - ")[0].split(" ")[-1] + " onward"
+            display.append({"label": collapsed, "count": count,
+                            "date_range": dr, "collapsed": run})
+            i += run
+        else:
+            display.append(w)
+            i += 1
+
+    for d in display:
+        count = d["count"]
         bar_len = int(count * scale) if count > 0 else 0
         bar = "█" * min(bar_len, bar_width)
-        dr = w.get("date_range", "")
-        lines.append(f"  {w['label']:24s}  {dr:16s} │ {count:3d}  {bar}")
+        dr = d.get("date_range", "")
+        lines.append(f"  {d['label']:5s}  {dr:30s}  {count:5d}  {bar}")
+
+    collapsed_total = sum(d.get("collapsed", 0) for d in display if d.get("collapsed"))
+    if collapsed_total:
+        lines.append("")
+        last_count = display[-1]["count"] if display else 0
+        lines.append(f"  ({collapsed_total} years with {last_count}+ posts collapsed into "
+                     f"{sum(1 for d in display if d.get('collapsed'))} rows — "
+                     "API sample cap reached)")
+
     lines.append("")
     lines.append(f"  (bar width = {max_count} posts = {bar_width} chars)")
     lines.append("")
