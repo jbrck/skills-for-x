@@ -381,26 +381,38 @@ def format_og_post(tweet: dict) -> str:
     rts = tweet.get("retweetCount", 0)
     replies = tweet.get("replyCount", 0)
     views = tweet.get("viewCount", 0)
-    return (
-        f"\n"
-        f"{'─' * 60}\n"
-        f"  SEED POST FOUND\n"
-        f"{'─' * 60}\n"
-        f"\n"
-        f"  Author:    @{username} ({name})\n"
-        f"  Date:      {created}\n"
-        f"  Link:      https://x.com/{username}/status/{tid}\n"
-        f"\n"
-        f"  {text}\n"
-        f"\n"
-        f"  ❤️ {likes}  ↻ {rts}  💬 {replies}  👁 {views}\n"
-        f"\n"
-        f"{'─' * 60}\n"
-    )
+    
+    # Wrap text to ~50 chars
+    words = text.split()
+    wrapped = []
+    line = ""
+    for w in words:
+        if len(line) + len(w) + 1 > 50:
+            wrapped.append(line)
+            line = w
+        else:
+            line = (line + " " + w).strip()
+    if line:
+        wrapped.append(line)
+    
+    card = []
+    card.append("╔══════════════════════════════════════════════════════╗")
+    card.append("║  SEED POST FOUND                                    ║")
+    card.append("╠══════════════════════════════════════════════════════╣")
+    card.append(f"║  @{username:<46s} ║")
+    card.append(f"║  {created:<46s} ║")
+    card.append(f"║  https://x.com/{username}/status/{tid:<12s}║")
+    card.append("╠══════════════════════════════════════════════════════╣")
+    for line in wrapped:
+        card.append(f"║  {line:<48s} ║")
+    card.append("╠══════════════════════════════════════════════════════╣")
+    card.append(f"║  ❤️ {likes:<5d}  ↻ {rts:<5d}  💬 {replies:<5d}  👁 {views:<5d}    ║")
+    card.append("╚══════════════════════════════════════════════════════╝")
+    return "\n".join(card)
 
 
 def format_growth(windows: list) -> str:
-    """Format growth data as a table with header, bars and counts.
+    """Format growth data as a compact card-style table.
 
     Collapses consecutive windows with the same count into a single
     "YYYY+" row for readability (mostly affects annual scans on
@@ -410,12 +422,12 @@ def format_growth(windows: list) -> str:
         return ""
 
     max_count = max(w["count"] for w in windows)
-    bar_width = 40
+    bar_width = 30
     scale = bar_width / max_count if max_count > 0 else 1
-    lines = ["", "─" * 60, "  GROWTH TIMELINE (mentions over time)",
-             "─" * 60, "",
-             "  Year   Date Range                 Count",
-             "  " + "─" * 52, ""]
+    
+    lines = ["╔══════════════════════════════════════════════════════╗",
+             "║  GROWTH TIMELINE     mentions over time              ║",
+             "╠════╦══════════════════╦═══════╦═══════════════════════╣"]
 
     # Collapse runs of 3+ consecutive windows with the same count
     display = []
@@ -442,20 +454,18 @@ def format_growth(windows: list) -> str:
         count = d["count"]
         bar_len = int(count * scale) if count > 0 else 0
         bar = "█" * min(bar_len, bar_width)
+        lbl = d["label"]
         dr = d.get("date_range", "")
-        lines.append(f"  {d['label']:5s}  {dr:30s}  {count:5d}  {bar}")
+        lines.append(f"║ {lbl:>5s} ║ {dr:28s} ║ {count:5d} ║ {bar:{bar_width}s} ║")
 
     collapsed_total = sum(d.get("collapsed", 0) for d in display if d.get("collapsed"))
     if collapsed_total:
-        lines.append("")
         last_count = display[-1]["count"] if display else 0
-        lines.append(f"  ({collapsed_total} years with {last_count}+ posts collapsed into "
-                     f"{sum(1 for d in display if d.get('collapsed'))} rows — "
-                     "API sample cap reached)")
+        collapsed_rows = sum(1 for d in display if d.get("collapsed"))
+        lines.append(f"╠════╧══════════════════╧═══════╧═══════════════════╣")
+        lines.append(f"║ {collapsed_total}yrs @ {last_count}+ posts — {collapsed_rows} row{'s' if collapsed_rows>1 else ''}  ║")
 
-    lines.append("")
-    lines.append(f"  (bar width = {max_count} posts = {bar_width} chars)")
-    lines.append("")
+    lines.append(f"╚══════════════════════════════════════════════════════╝")
     return "\n".join(lines)
 
 
