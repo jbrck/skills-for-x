@@ -1,0 +1,9 @@
+{
+  "name": "seed-post",
+  "version": "1.0.0",
+  "description": "Find the first mention of any phrase on X/Twitter",
+  "private": true,
+  "dependencies": {
+    "@steipete/bird": "^0.8.0"
+  }
+}
