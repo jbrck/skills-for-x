@@ -22,6 +22,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -140,6 +141,27 @@ def fmt_date(dt: datetime.datetime) -> str:
     return dt.strftime("%Y-%m-%d")
 
 
+def parse_window_duration(dur_str: str) -> int | None:
+    """Parse duration like '30d', '3m', '1y' into days. Returns None if unparseable."""
+    m = re.match(r"^(\d+)([dmy])$", dur_str.strip().lower())
+    if not m:
+        return None
+    val = int(m.group(1))
+    unit = m.group(2)
+    if unit == "d":
+        return val
+    elif unit == "m":
+        return val * 30
+    elif unit == "y":
+        return val * 365
+
+
+def parse_ymd(date_str: str) -> tuple:
+    """Parse YYYY-MM-DD into (year, month, day)."""
+    parts = date_str.split("-")
+    return int(parts[0]), int(parts[1]), int(parts[2])
+
+
 def today_utc() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc).replace(
         hour=0, minute=0, second=0, microsecond=0
@@ -157,19 +179,22 @@ def probe_range(phrase: str, since_str: str, until_str: str,
     return len(results) if results else 0
 
 
-def find_earliest_year(phrase: str, auth: str, ct0: str) -> int:
-    """Walk backward from current year to find earliest year with mentions."""
-    current_year = today_utc().year
-    earliest = current_year
+def find_earliest_year(phrase: str, auth: str, ct0: str,
+                       start_year: int = X_LAUNCH_YEAR,
+                       end_year: int | None = None) -> int:
+    """Walk backward from end_year to start_year to find earliest year."""
+    if end_year is None:
+        end_year = today_utc().year
+    earliest = end_year
 
-    for year in range(current_year, X_LAUNCH_YEAR - 1, -1):
+    for year in range(end_year, start_year - 1, -1):
         print(f"  Checking {year}... ", end="", file=sys.stderr, flush=True)
         count = probe_range(phrase,
             f"since:{year}-01-01", f"until:{year + 1}-01-01", auth, ct0)
         print(f"({'✅' if count > 0 else '❌'}) ({count})", file=sys.stderr)
         if count > 0:
             earliest = year
-        elif year < current_year:
+        elif year < end_year:
             return year + 1
 
     return earliest
@@ -192,21 +217,18 @@ def find_earliest_month(phrase: str, year: int, auth: str, ct0: str) -> int:
 
 def find_earliest_day(phrase: str, year: int, month: int,
                       auth: str, ct0: str) -> int:
-    """Binary chop: find earliest day with mentions (single-day windows)."""
+    """Find earliest day with mentions via linear scan.
+    Month has at most 31 days — linear scan is reliable and fast enough.
+    """
     if month == 12:
         days_in_month = 31
     else:
         next_m = datetime.date(year, month + 1, 1)
         days_in_month = (next_m - datetime.timedelta(days=1)).day
 
-    lo, hi = 1, days_in_month
-    first_day = days_in_month
-
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        print(f"  Checking {year}-{month:02d}-{mid:02d}... ", end="", file=sys.stderr, flush=True)
-
-        day_end = mid + 1
+    print(f"  Scanning {year}-{month:02d} day by day...", file=sys.stderr, flush=True)
+    for day in range(1, days_in_month + 1):
+        day_end = day + 1
         if day_end <= days_in_month:
             ck_y, ck_m, ck_d = year, month, day_end
         elif month == 12:
@@ -215,17 +237,14 @@ def find_earliest_day(phrase: str, year: int, month: int,
             ck_y, ck_m, ck_d = year, month + 1, 1
 
         count = probe_range(phrase,
-            f"since:{year}-{month:02d}-{mid:02d}",
+            f"since:{year}-{month:02d}-{day:02d}",
             f"until:{ck_y}-{ck_m:02d}-{ck_d:02d}", auth, ct0)
-        print(f"({'✅' if count > 0 else '❌'}) ({count})", file=sys.stderr)
-
         if count > 0:
-            first_day = mid
-            hi = mid - 1
-        else:
-            lo = mid + 1
+            print(f"  > Earliest day: {year}-{month:02d}-{day:02d}",
+                  file=sys.stderr)
+            return day
 
-    return first_day
+    return days_in_month  # fallback
 
 
 def fetch_day_tweets(phrase: str, year: int, month: int, day: int,
@@ -241,11 +260,31 @@ def fetch_day_tweets(phrase: str, year: int, month: int, day: int,
     results = run_bird(query, BIRD_SEARCH_MAX_COUNT, auth, ct0)
     return results or []# ── Growth scan ───────────────────────────────────────────────────────
 
-def build_windows(first_date: datetime.datetime) -> list:
-    """Build time windows from first_date to today. Returns (label, since, until)."""
+def build_windows(first_date: datetime.datetime,
+                  window_days: int | None = None) -> list:
+    """Build time windows from first_date to today. Returns (label, since, until).
+
+    When window_days is set, uses repeated windows of that duration.
+    Otherwise uses default scheme.
+    """
     today = today_utc()
+    first = first_date
+
+    if window_days is not None:
+        windows = []
+        cur = first
+        idx = 1
+        while cur < today:
+            nxt = cur + datetime.timedelta(days=window_days)
+            if nxt > today:
+                nxt = today
+            windows.append((f"Window {idx}", cur, nxt))
+            cur = nxt
+            idx += 1
+        return windows
+
     windows = []
-    w1_end = first_date + datetime.timedelta(days=7)
+    w1_end = first + datetime.timedelta(days=7)
     w2_end = first_date + datetime.timedelta(days=14)
     m1_end = first_date + datetime.timedelta(days=30)
     windows.append(("Week 1 (first 7 days)", first_date, min(w1_end, today)))
@@ -261,10 +300,31 @@ def build_windows(first_date: datetime.datetime) -> list:
     return windows
 
 
+def fmt_date_range(since: str, until: str) -> str:
+    """Format date range for display.
+    Same month: 'Sep 22-29'
+    Different month: 'Sep 22 - Oct 19'
+    Different year: 'Dec 22 2026 - Jan 19 2027'
+    """
+    since_parts = since.split("-")
+    until_parts = until.split("-")
+    months = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    sm, sd = int(since_parts[1]), int(since_parts[2])
+    um, ud = int(until_parts[1]), int(until_parts[2])
+    if since_parts[0] == until_parts[0] and sm == um:
+        return f"{months[sm]} {sd}-{ud}"
+    elif since_parts[0] == until_parts[0]:
+        return f"{months[sm]} {sd} - {months[um]} {ud}"
+    else:
+        return f"{months[sm]} {sd} {since_parts[0]} - {months[um]} {ud}"
+
+
 def scan_growth(phrase: str, first_date: datetime.datetime,
-                auth: str, ct0: str) -> list:
+                auth: str, ct0: str,
+                window_days: int | None = None) -> list:
     """Scan mention frequency across growth windows."""
-    windows = build_windows(first_date)
+    windows = build_windows(first_date, window_days=window_days)
     results = []
     for label, since_dt, until_dt in windows:
         print(f"  {label}... ", end="", file=sys.stderr, flush=True)
@@ -273,7 +333,9 @@ def scan_growth(phrase: str, first_date: datetime.datetime,
             f"until:{fmt_date(until_dt)}", auth, ct0)
         print(f"{count} posts", file=sys.stderr)
         results.append({"label": label, "since": fmt_date(since_dt),
-                         "until": fmt_date(until_dt), "count": count})
+                         "until": fmt_date(until_dt), "count": count,
+                         "date_range": fmt_date_range(fmt_date(since_dt),
+                                                       fmt_date(until_dt))})
     return results
 
 
@@ -315,12 +377,15 @@ def format_growth(windows: list) -> str:
     bar_width = 40
     scale = bar_width / max_count if max_count > 0 else 1
     lines = ["", "─" * 60, "  GROWTH TIMELINE (mentions over time)",
-             "─" * 60, ""]
+             "─" * 60, "",
+             "  Window                    Date Range            Count",
+             "  " + "─" * 54, ""]
     for w in windows:
         count = w["count"]
         bar_len = int(count * scale) if count > 0 else 0
         bar = "█" * min(bar_len, bar_width)
-        lines.append(f"  {w['label']:27s} │ {count:3d}  {bar}")
+        dr = w.get("date_range", "")
+        lines.append(f"  {w['label']:24s}  {dr:16s} │ {count:3d}  {bar}")
     lines.append("")
     lines.append(f"  (bar width = {max_count} posts = {bar_width} chars)")
     lines.append("")
@@ -330,21 +395,41 @@ def format_growth(windows: list) -> str:
 # ── Main pipeline ─────────────────────────────────────────────────────
 
 def find_seed_post(phrase: str, auth: str, ct0: str,
-                   growth: bool = False) -> dict:
-    """Full pipeline. Returns result dict."""
+                   growth: bool = False,
+                   after_date: str | None = None,
+                   before_date: str | None = None,
+                   window_days: int | None = None) -> dict:
+    """Full pipeline. Returns result dict.
+
+    Supports --after, --before bounds and --window growth duration.
+    """
     print(f"🔎 Searching for first mention of \"{phrase}\" on X", file=sys.stderr)
 
+    # Resolve search bounds from --after/--before
+    start_year = X_LAUNCH_YEAR
+    end_year = today_utc().year
+    if after_date:
+        sy, sm, sd = parse_ymd(after_date)
+        start_year = sy
+    if before_date:
+        ey, em, ed = parse_ymd(before_date)
+        end_year = ey
+
+    lo = after_date or f"{start_year}-01-01"
+    hi = before_date or f"{end_year}-12-31"
+    print(f"  Range: {lo} → {hi}", file=sys.stderr)
+
     print("Phase 1: Existence check", file=sys.stderr)
-    count = probe_range(phrase,
-        f"since:{X_LAUNCH_YEAR}-01-01",
-        f"until:{today_utc().year + 1}-01-01", auth, ct0)
+    since = f"since:{after_date}" if after_date else f"since:{start_year}-01-01"
+    until = f"until:{int(end_year) + 1}-01-01" if not before_date else f"until:{before_date}"
+    count = probe_range(phrase, since, until, auth, ct0)
     if count == 0:
-        print(f"\n  No mentions of \"{phrase}\" found.\n", file=sys.stderr)
+        print(f"\n  No mentions of \"{phrase}\" found in that range.\n", file=sys.stderr)
         return {"found": False, "phrase": phrase}
     print(f"  ✅ Found — at least {count} result{'s' if count != 1 else ''}", file=sys.stderr)
 
     print("Phase 2: Binary-chop — earliest year", file=sys.stderr)
-    year = find_earliest_year(phrase, auth, ct0)
+    year = find_earliest_year(phrase, auth, ct0, start_year=start_year, end_year=end_year)
     print(f"  → Earliest year: {year}", file=sys.stderr)
 
     print("Phase 3: Earliest month", file=sys.stderr)
@@ -376,7 +461,8 @@ def find_seed_post(phrase: str, auth: str, ct0: str,
         print(file=sys.stderr)
         print("Phase 6: Growth scan", file=sys.stderr)
         first_date = parse_timestamp(first_tweet["createdAt"])
-        growth_data = scan_growth(phrase, first_date, auth, ct0)
+        growth_data = scan_growth(phrase, first_date, auth, ct0,
+                                  window_days=window_days)
 
     return {"found": True, "phrase": phrase, "og_post": first_tweet,
             "growth": growth_data}
@@ -392,6 +478,12 @@ def main():
                         help="Output results as JSON (machine-readable)")
     parser.add_argument("--install", action="store_true",
                         help="Install @steipete/bird dependency if missing")
+    parser.add_argument("--after", metavar="YYYY-MM-DD",
+                        help="Only search after this date (inclusive)")
+    parser.add_argument("--before", metavar="YYYY-MM-DD",
+                        help="Only search before this date (exclusive)")
+    parser.add_argument("--window", metavar="DURATION",
+                        help="Growth window duration: '30d', '3m', '1y' etc.")
 
     args = parser.parse_args()
     phrase = args.phrase.strip()
@@ -399,6 +491,23 @@ def main():
     if len(phrase) < 2:
         print("error: phrase must be at least 2 characters", file=sys.stderr)
         sys.exit(1)
+
+    # Validate --after/--before format
+    for flag in ["after", "before"]:
+        val = getattr(args, flag)
+        if val and not re.match(r"^\d{4}-\d{2}-\d{2}$", val):
+            print(f"error: --{flag} must be YYYY-MM-DD format, got '{val}'",
+                  file=sys.stderr)
+            sys.exit(1)
+
+    # Parse --window
+    window_days = None
+    if args.window:
+        window_days = parse_window_duration(args.window)
+        if window_days is None:
+            print(f"error: --window must be like '30d', '3m', or '1y', got '{args.window}'",
+                  file=sys.stderr)
+            sys.exit(1)
 
     # Install check
     if not bird_is_installed():
@@ -416,7 +525,9 @@ def main():
 
     # Run
     auth, ct0 = load_credentials()
-    result = find_seed_post(phrase, auth, ct0, growth=args.graph)
+    result = find_seed_post(phrase, auth, ct0, growth=args.graph,
+                            after_date=args.after, before_date=args.before,
+                            window_days=window_days)
 
     if args.json:
         print(json.dumps(result, indent=2, default=str))

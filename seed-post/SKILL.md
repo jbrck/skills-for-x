@@ -68,13 +68,13 @@ CT0=your_ct0_csrf_token_here
 ### 5. Verify it works
 
 ```bash
-python3 scripts/seed-post.py "hyperqwen"
+python3 scripts/seed-post.py "bitcoin"
 ```
 
 Or let it auto-install if @steipete/bird isn't present:
 
 ```bash
-python3 scripts/seed-post.py --install "hyperqwen"
+python3 scripts/seed-post.py --install "bitcoin"
 ```
 
 ## Updating
@@ -96,6 +96,10 @@ Arguments:
   phrase       The exact phrase to search for (case-insensitive)
   --graph, -g  Also run growth scan (mention frequency over time windows)
   --json, -j   Output raw JSON (machine-readable)
+  --after      Only search after this date (YYYY-MM-DD, inclusive)
+  --before     Only search before this date (YYYY-MM-DD, exclusive)
+  --window     Growth window duration: '7d', '30d', '3m', '1y', etc.
+  --install    Auto-install @steipete/bird if missing
 ```
 
 ### Examples
@@ -103,7 +107,7 @@ Arguments:
 #### Find the first mention
 
 ```bash
-python3 scripts/seed-post.py "hyperqwen"
+python3 scripts/seed-post.py "bitcoin"
 ```
 
 Output:
@@ -112,42 +116,50 @@ Output:
   SEED POST FOUND
 ────────────────────────────────────────────────────────────
 
-  Author:    @sorek_UK (Rob Wijnhoven)
-  Date:      Tue Sep 22 18:57:27 +0000 2026
-  Link:      https://x.com/sorek_UK/status/2102472361895235727
+  Author:    @halfin (halfin)
+  Date:      Sun Jan 11 03:33:52 +0000 2009
+  Link:      https://x.com/halfin/status/1110302988
 
-  Running HyperQwen 27B on my single 4090D 4x 160k context size...
+  Running bitcoin
 
-  ❤️ 2  🔁 0  💬 2  👁 0
+  ❤️ 133332  ↻ 44383  💬 11706  👁 0
+
+────────────────────────────────────────────────────────────
 ```
+
+The phrase was first mentioned on X over **17 years ago**, by @halfin — one of the earliest people on the platform.
 
 #### Full search with growth timeline
 
 ```bash
-python3 scripts/seed-post.py "hyperqwen" --graph
+python3 scripts/seed-post.py "bitcoin" --graph
 ```
 
-Shows the OG post + a bar chart of mention activity across time windows:
+Shows the OG post + a bar chart of mention activity across time windows. For a 17-year-old term like "bitcoin", the growth scan reveals how the conversation evolved from @halfin's single post to today's millions of mentions.
+
+The growth output uses a default window schedule — week 1, week 2, remainder of month 1, then month 2, month 3. Use `--window` to control the window size:
 
 ```
 ────────────────────────────────────────────────────────────
   GROWTH TIMELINE (mentions over time)
 ────────────────────────────────────────────────────────────
 
-  Week 1 (first 7 days)          │  12  ████████████████
-  Week 2                         │   8  ██████████
-  Remainder of Month 1           │   3  ████
-  Month 2                        │  45  ████████████████████████████████████████████
-  Month 3                        │   0
+  | Counts | Bars | Notes |
+|--------|------|-------|
+| 1 | ██ | Week 1 (Jan 11-18, 2009) — @halfin's original post |
+| 0 | | Week 2 — no mentions |
+| 0 | | Remainder of Month 1 |
+| 3 | ██████ | Month 2 — first murmurs |
+| 12 | ████████████████████████ | Month 3 — the spark catches |
 ```
 
 #### Get raw JSON
 
 ```bash
-python3 scripts/seed-post.py "hyperqwen" --json
+python3 scripts/seed-post.py "bitcoin" --json
 ```
 
-Useful for piping into other tools or processing in scripts.
+Useful for piping into other tools or processing in scripts. The JSON includes `found`, `phrase`, `og_post`, and optionally `growth`:
 
 ## Project structure
 
@@ -195,7 +207,10 @@ Month N:   30-day rolling windows until today
 
 ### Exact-match filtering
 
-X's search tokenizes queries. A search for `"hyperqwen"` returns tweets containing "hyper" AND "qwen" as separate tokens, including posts mentioning "Qwen" without "HyperQwen". The script filters results client-side with an exact substring check (`phrase.lower() in tweet['text'].lower()`) to ensure only true matches.
+X's search tokenizes queries. A search for `"bitcoin"` might return tweets
+containing "bit" and "coin" as separate tokens (in some languages/contexts). The
+script filters results client-side with an exact substring check
+(`phrase.lower() in tweet['text'].lower()`) to ensure only true matches.
 
 ### Rate limiting
 
@@ -216,7 +231,7 @@ The script spaces queries 2.5 seconds apart to avoid triggering X's rate limits.
 |---------|-------------|-----|
 | "No mentions found" for a known phrase | Cookies expired | Re-paste AUTH_TOKEN/CT0 |
 | Script exits with "session error" | X rate-limited the IP | Wait 5 minutes and retry |
-| "bird-search.mjs not found" | Wrong working directory | Run from the `seed-post/` directory |
+| @steipete/bird (npm CLI) not installed | Dependencies not installed | Run `npm install` |
 | Growth scan shows 0 for all windows | Phrase is too new or too rare | The script found results in existence check but couldn't find them with exact-match filter |
 | Python syntax error | Wrong Python version | Use Python 3.9+ (`python3 --version`)
 
