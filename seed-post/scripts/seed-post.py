@@ -96,30 +96,43 @@ def load_credentials() -> tuple:
 # ── Bird-search runner ────────────────────────────────────────────────
 
 def run_bird(query: str, count: int, auth: str, ct0: str) -> list:
-    """Run @steipete/bird search. Returns list of tweet dicts or empty list."""
+    """Run @steipete/bird search. Returns list of tweet dicts or empty list.
+    Retries on rate limits (429) with exponential backoff.
+    """
     cmd = [
         str(BIRD_BIN), "--auth-token", auth, "--ct0", ct0,
         "search", query,
         "--count", str(count), "--json",
     ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    except subprocess.TimeoutExpired:
-        print("  [timeout]", file=sys.stderr)
-        return []
+    for attempt in range(3):
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            print("  [timeout]", file=sys.stderr)
+            return []
 
-    if result.returncode != 0 or not result.stdout.strip():
+        if result.returncode == 0 and result.stdout.strip():
+            try:
+                tweets = json.loads(result.stdout)
+                return tweets if isinstance(tweets, list) else []
+            except json.JSONDecodeError:
+                return []
+
+        # Check for rate limit
         err = result.stderr.strip()[:200]
+        if err and "429" in err:
+            wait = 2 ** attempt * 20  # 20s, 40s, 80s
+            print(f"  [rate limited — retrying in {wait}s]", file=sys.stderr)
+            time.sleep(wait)
+            continue
+
+        # Non-rate-limit error — don't retry
         if err:
             print(f"  [{err}]", file=sys.stderr)
         return []
 
-    try:
-        tweets = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return []
-
-    return tweets if isinstance(tweets, list) else []
+    print("  [gave up after 3 retries]", file=sys.stderr)
+    return []
 
 
 def exact_match(phrase: str, tweet: dict) -> bool:
@@ -261,30 +274,45 @@ def fetch_day_tweets(phrase: str, year: int, month: int, day: int,
     return results or []# ── Growth scan ───────────────────────────────────────────────────────
 
 def build_windows(first_date: datetime.datetime,
-                  window_days: int | None = None) -> list:
-    """Build time windows from first_date to today. Returns (label, since, until).
+                  window_days: int | None = None,
+                  annual: bool = False) -> list:
+    """Build time windows from first_date to today.
+    Returns list of (label, since_dt, until_dt).
 
+    When annual=True, uses calendar-year windows from first_date's year to today.
     When window_days is set, uses repeated windows of that duration.
-    Otherwise uses default scheme.
+    Otherwise uses default scheme (week 1, week 2, remainder, month 2, month 3).
     """
+    first_dt = first_date.date()
     today = today_utc()
-    first = first_date
+
+    if annual:
+        windows = []
+        now_year = today.year
+        for year in range(first_dt.year, now_year + 1):
+            jan1 = datetime.date(year, 1, 1)
+            dec31 = datetime.date(year, 12, 31)
+            since = first_dt if year == first_dt.year else jan1
+            until = today.date() if year == now_year else dec31
+            windows.append((str(year), since, until))
+        return windows
 
     if window_days is not None:
         windows = []
-        cur = first
+        cur = first_dt
         idx = 1
-        while cur < today:
+        t = today.date()
+        while cur < t:
             nxt = cur + datetime.timedelta(days=window_days)
-            if nxt > today:
-                nxt = today
+            if nxt > t:
+                nxt = t
             windows.append((f"Window {idx}", cur, nxt))
             cur = nxt
             idx += 1
         return windows
 
     windows = []
-    w1_end = first + datetime.timedelta(days=7)
+    w1_end = first_date + datetime.timedelta(days=7)
     w2_end = first_date + datetime.timedelta(days=14)
     m1_end = first_date + datetime.timedelta(days=30)
     windows.append(("Week 1 (first 7 days)", first_date, min(w1_end, today)))
@@ -298,8 +326,6 @@ def build_windows(first_date: datetime.datetime,
         ws = we
         month_num += 1
     return windows
-
-
 def fmt_date_range(since: str, until: str) -> str:
     """Format date range for display.
     Same month: 'Sep 22-29'
@@ -322,15 +348,18 @@ def fmt_date_range(since: str, until: str) -> str:
 
 def scan_growth(phrase: str, first_date: datetime.datetime,
                 auth: str, ct0: str,
-                window_days: int | None = None) -> list:
+                window_days: int | None = None,
+                annual: bool = False) -> list:
     """Scan mention frequency across growth windows."""
-    windows = build_windows(first_date, window_days=window_days)
+    GScan = 100  # ask for more for growth scan cuz we need actual counts
+    windows = build_windows(first_date, window_days=window_days,
+                            annual=annual)
     results = []
     for label, since_dt, until_dt in windows:
         print(f"  {label}... ", end="", file=sys.stderr, flush=True)
-        count = probe_range(phrase,
-            f"since:{fmt_date(since_dt)}",
-            f"until:{fmt_date(until_dt)}", auth, ct0)
+        query = f'"{phrase}" since:{fmt_date(since_dt)} until:{fmt_date(until_dt)}'
+        tweets = run_bird(query, GScan, auth, ct0)
+        count = len(tweets)
         print(f"{count} posts", file=sys.stderr)
         results.append({"label": label, "since": fmt_date(since_dt),
                          "until": fmt_date(until_dt), "count": count,
@@ -398,10 +427,11 @@ def find_seed_post(phrase: str, auth: str, ct0: str,
                    growth: bool = False,
                    after_date: str | None = None,
                    before_date: str | None = None,
-                   window_days: int | None = None) -> dict:
+                   window_days: int | None = None,
+                   annual: bool = False) -> dict:
     """Full pipeline. Returns result dict.
 
-    Supports --after, --before bounds and --window growth duration.
+    Supports --after, --before bounds and --window/--annual for growth.
     """
     print(f"🔎 Searching for first mention of \"{phrase}\" on X", file=sys.stderr)
 
@@ -462,7 +492,8 @@ def find_seed_post(phrase: str, auth: str, ct0: str,
         print("Phase 6: Growth scan", file=sys.stderr)
         first_date = parse_timestamp(first_tweet["createdAt"])
         growth_data = scan_growth(phrase, first_date, auth, ct0,
-                                  window_days=window_days)
+                                  window_days=window_days,
+                                  annual=annual)
 
     return {"found": True, "phrase": phrase, "og_post": first_tweet,
             "growth": growth_data}
@@ -483,7 +514,9 @@ def main():
     parser.add_argument("--before", metavar="YYYY-MM-DD",
                         help="Only search before this date (exclusive)")
     parser.add_argument("--window", metavar="DURATION",
-                        help="Growth window duration: '30d', '3m', '1y' etc.")
+                        help="Growth window duration: '7d', '30d', '3m', '1y' etc.")
+    parser.add_argument("--annual", action="store_true",
+                        help="Annual growth windows (calendar years from OG post)")
 
     args = parser.parse_args()
     phrase = args.phrase.strip()
@@ -527,7 +560,8 @@ def main():
     auth, ct0 = load_credentials()
     result = find_seed_post(phrase, auth, ct0, growth=args.graph,
                             after_date=args.after, before_date=args.before,
-                            window_days=window_days)
+                            window_days=window_days,
+                            annual=args.annual)
 
     if args.json:
         print(json.dumps(result, indent=2, default=str))
