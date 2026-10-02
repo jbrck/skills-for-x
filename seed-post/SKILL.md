@@ -222,9 +222,9 @@ The script spaces queries 2.5 seconds apart to avoid triggering X's rate limits.
 
 ## License
 
-MIT. This project vendors `bird-search.mjs` from the `last30days` project by mvanhorn (originally `@steipete/bird` by Peter Steinberger), also MIT licensed.
+MIT. This project uses `@steipete/bird` (npm CLI) for X GraphQL API access.
 
 ## Related
 
 This is part of the `skills-for-x` collection — standalone skills for X/Twitter.
-More at: https://github.com/jbrck/skills-for-x
+More at: https://github.com/jbrck/skills
