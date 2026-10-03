@@ -135,27 +135,6 @@ def run_bird(query: str, count: int, auth: str, ct0: str) -> list:
     return []
 
 
-def run_bird_replies(tweet_id: str, auth: str, ct0: str, count: int = 20) -> list:
-    """Get replies to a tweet via bird replies command.
-    Returns up to `count` replies sorted chronologically.
-    """
-    cmd = [
-        str(BIRD_BIN), "--auth-token", auth, "--ct0", ct0,
-        "replies", tweet_id, "--json", "--max-pages", "2"
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if result.returncode != 0 or not result.stdout.strip():
-            return []
-        data = json.loads(result.stdout)
-        tweets = data.get("tweets", [])
-    except (json.JSONDecodeError, subprocess.TimeoutExpired, KeyError):
-        return []
-
-    tweets.sort(key=lambda t: t.get("createdAt", ""))
-    return tweets[:count]
-
-
 def exact_match(phrase: str, tweet: dict) -> bool:
     """Case-insensitive exact substring check."""
     return phrase.lower() in tweet.get("text", "").lower()
@@ -493,27 +472,33 @@ def format_growth(windows: list) -> str:
 def fetch_early_shares(tweet_id: str, tweet_created_at: str,
                        phrase: str, auth: str, ct0: str,
                        max_shares: int = 5) -> list:
-    """Fetch early replies to the seed post within 7 days of its creation.
-    Returns list of tweet dicts sorted chronologically, up to max_shares.
-    """
-    time.sleep(QUERY_DELAY)
-    replies = run_bird_replies(tweet_id, auth, ct0, count=max_shares + 10)
-    if not replies:
-        return []
+    """Fetch the first posts that mentioned the phrase after the seed post.
 
-    # Parse seed post timestamp, calculate 7-day window
+    Searches for the phrase in a 7-day window after the OG post and
+    excludes the seed post itself. Captures early retweets, quote tweets,
+    and independent mentions — anyone who picked up the term next.
+    """
     seed_dt = parse_timestamp(tweet_created_at)
+    day_after = seed_dt + datetime.timedelta(days=1)
     week_later = seed_dt + datetime.timedelta(days=7)
 
-    # Filter to replies within the first 7 days
+    time.sleep(QUERY_DELAY)
+    query = (
+        f'"{phrase}" '
+        f"since:{fmt_date(day_after)} "
+        f"until:{fmt_date(week_later)}"
+    )
+    results = run_bird(query, 30, auth, ct0)
+    if not results:
+        return []
+
+    # Filter to posts with the phrase, exclude the seed post itself
     early = []
-    for t in replies:
-        try:
-            t_dt = parse_timestamp(t["createdAt"])
-            if t_dt <= week_later and t["id"] != tweet_id:
-                early.append(t)
-        except (KeyError, ValueError):
-            continue
+    seen_ids = {tweet_id}
+    for t in results:
+        if t.get("id") and t["id"] not in seen_ids and exact_match(phrase, t):
+            early.append(t)
+            seen_ids.add(t["id"])
         if len(early) >= max_shares:
             break
     return early
@@ -525,7 +510,7 @@ def format_early_shares(shares: list) -> str:
         return ""
     card = []
     card.append("╔══════════════════════════════════════════════════════╗")
-    card.append("║  EARLY SHARES    first to engage                    ║")
+    card.append("║  FIRST RETWEETS   who picked it up next              ║")
     card.append("╠══════════════════════════════════════════════════════╣")
     for i, t in enumerate(shares, 1):
         author = t.get("author", {})
@@ -630,11 +615,11 @@ def find_seed_post(phrase: str, auth: str, ct0: str,
     shares_data = None
     if shares_count > 0:
         print(file=sys.stderr)
-        print(f"Phase 7: Early shares (first {shares_count})", file=sys.stderr)
+        print(f"Phase 7: Early retweets (first {shares_count})", file=sys.stderr)
         shares_data = fetch_early_shares(
             first_tweet["id"], first_tweet["createdAt"],
             phrase, auth, ct0, max_shares=shares_count)
-        print(f"  → Found {len(shares_data)} early share{'s' if len(shares_data)!=1 else ''}",
+        print(f"  → Found {len(shares_data)} early retweet{'s' if len(shares_data)!=1 else ''}",
               file=sys.stderr)
 
     return {"found": True, "phrase": phrase, "og_post": first_tweet,
