@@ -63,44 +63,122 @@ The script uses X's internal GraphQL API (via `@steipete/bird`) to search the fu
 
 ## X search operators
 
-Seed-post passes your query directly to X's GraphQL API. You can include any X search operator in your phrase to narrow results.
+Seed-post passes your query directly to X's GraphQL API. You can include any [X search operator](https://docs.x.com/x-api/posts/search/integrate/operators) in your phrase to narrow results.
 
-### Filter by account
+### Keyword and phrase
 
-| Operator | Example | What it does |
-|----------|---------|-------------|
-| `from:username` | `from:halfin bitcoin` | Posts from a specific user |
-| `to:username` | `to:halfin bitcoin` | Posts replying to a specific user |
-| `@username` | `@halfin bitcoin` | Posts mentioning a specific user |
+| Operator | Type | What it does | Example |
+|----------|------|-------------|---------|
+| `keyword` | standalone | Tokenized match in post body | `pepsi OR cola` |
+| `"exact phrase"` | standalone | Exact phrase match in post body | `"voting machine" tampering` |
+| `emoji` | standalone | Match emoji in post body | `(😃 OR 😡) 😬` |
 
-### Filter by content type
+### Entity operators
 
-| Operator | Example | What it does |
-|----------|---------|-------------|
-| `has:images` | `bitcoin has:images` | Posts with images |
-| `has:videos` | `bitcoin has:videos` | Posts with videos |
-| `has:media` | `bitcoin has:media` | Posts with any media |
-| `has:links` | `bitcoin has:links` | Posts containing a link |
-| `has:hashtags` | `bitcoin has:hashtags` | Posts with hashtags |
-| `has:mentions` | `bitcoin has:mentions` | Posts with @mentions |
-| `-` (minus) | `bitcoin -ethereum` | Exclude posts matching a term |
-| `lang:LANG` | `bitcoin lang:en` | Posts in a specific language |
+| Operator | Type | What it does | Example |
+|----------|------|-------------|---------|
+| `#` | standalone | Match a hashtag (exact) | `#thankunext #fanart` |
+| `@` | standalone | Match a username mention | `@XDevelopers` |
+| `$` | standalone | Match a cashtag | `$twtr OR $btc` |
 
-### Filter by engagement
+### User operators
 
-| Operator | Example | What it does |
-|----------|---------|-------------|
-| `min_replies:N` | `bitcoin min_replies:10` | Posts with at least N replies |
-| `min_likes:N` | `bitcoin min_likes:50` | Posts with at least N likes |
-| `min_retweets:N` | `bitcoin min_retweets:5` | Posts with at least N retweets |
+| Operator | Type | What it does | Example |
+|----------|------|-------------|---------|
+| `from:username` | standalone | Posts from a specific user | `from:halfin` |
+| `to:username` | standalone | Posts in reply to a specific user | `to:XDevelopers` |
+| `retweets_of:username` | standalone | Retweets of a specific user | `retweets_of:twitterdev` |
 
-### Filter by URL
+### Post type
 
-| Operator | Example | What it does |
-|----------|---------|-------------|
-| `url:domain.com` | `bitcoin url:coinbase.com` | Posts containing a link to a domain |
+| Operator | Type | What it does | Example |
+|----------|------|-------------|---------|
+| `is:retweet` | conjunction required | Match retweets | `bitcoin is:retweet` |
+| `is:reply` | conjunction required | Match replies | `from:XDevelopers is:reply` |
+| `is:quote` | conjunction required | Match quote tweets | `"voting machine" is:quote` |
+| `is:verified` | conjunction required | Posts from verified accounts | `#nowplaying is:verified` |
+| `-is:nullcast` | conjunction required | Exclude promotional posts | `"mobile games" -is:nullcast` |
 
-### Examples with operators
+### Content type
+
+| Operator | Type | What it does | Example |
+|----------|------|-------------|---------|
+| `has:hashtags` | conjunction required | Posts with hashtags | `from:XDevelopers -has:hashtags` |
+| `has:cashtags` | conjunction required | Posts with cashtags | `#stonks has:cashtags` |
+| `has:links` | conjunction required | Posts with links | `from:XDevelopers has:links` |
+| `has:mentions` | conjunction required | Posts with @mentions | `#nowplaying has:mentions` |
+| `has:media` | conjunction required | Posts with media (photo/GIF/video) | `(kittens OR puppies) has:media` |
+| `has:images` | conjunction required | Posts with images | `#meme has:images` |
+| `has:video_link` | conjunction required | Posts with native X videos | `#icebucketchallenge has:video_link` |
+| `has:geo` | conjunction required | Posts with geolocation | `#paris has:geo` |
+
+### Engagement
+
+| Operator | Type | What it does | Example |
+|----------|------|-------------|---------|
+| `min_replies:N` | standalone | At least N replies | `from:XDevelopers min_replies:10` |
+| `min_likes:N` | standalone | At least N likes | `#SuperBowl min_likes:100` |
+| `min_reposts:N` | standalone | At least N reposts | `"breaking news" min_reposts:50` |
+
+Note: the API uses `min_likes:` and `min_reposts:`, not `min_faves:` or `min_retweets:` (those are web-only aliases and will be rejected by the API).
+
+### URL
+
+| Operator | Type | What it does | Example |
+|----------|------|-------------|---------|
+| `url:domain.com` | standalone | Posts linking to a domain | `bitcoin url:coinbase.com` |
+
+### Language
+
+| Operator | Type | What it does | Example |
+|----------|------|-------------|---------|
+| `lang:LANG` | conjunction required | Posts in a language | `bitcoin lang:en` |
+
+BCP 47 codes: `en`, `es`, `fr`, `de`, `ja`, `zh-CN`, `zh-TW`, `ar`, `ru`, `pt`, `it`, `nl`, `ko`, `hi`, `tr`, and [40+ more](https://docs.x.com/x-api/posts/search/integrate/operators#supported-languages).
+
+### Location
+
+| Operator | Type | What it does | Example |
+|----------|------|-------------|---------|
+| `place:"name"` | standalone | Posts tagged with a location | `place:"new york city"` |
+| `place_country:CODE` | standalone | Posts in a country code | `place_country:US` |
+| `point_radius:[lat lng radius]` | standalone | Posts within a radius | `point_radius:[2.355128 48.861118 16km]` |
+| `bounding_box:[sw_lat sw_lng ne_lat ne_lng]` | standalone | Posts in a bounding box | `bounding_box:[-105.3 39.96 -105.17 40.09]` |
+
+### Post reference
+
+| Operator | Type | What it does | Example |
+|----------|------|-------------|---------|
+| `retweets_of_tweet_id:N` | standalone | Retweets of a specific post | `retweets_of_tweet_id:1539382664746020864` |
+| `quotes_of_tweet_id:N` | standalone | Quote tweets of a specific post | `quotes_of_tweet_id:1539382664746020864` |
+| `in_reply_to_tweet_id:N` | standalone | Replies to a specific post | `in_reply_to_tweet_id:1539382664746020864` |
+| `conversation_id:N` | standalone | Posts in a conversation thread | `conversation_id:1334987486343299072` |
+
+### List and context
+
+| Operator | Type | What it does | Example |
+|----------|------|-------------|---------|
+| `list:N` | standalone | Posts from a List's members | `list:123` |
+| `context:DOMAIN.ID` | standalone | Match a domain/entity pair | `context:10.799022225751871488` |
+| `entity:"value"` | standalone | Match an entity string value | `entity:"Michael Jordan"` |
+
+### Logical operators
+
+| Operator | What it does |
+|----------|-------------|
+| `OR` | Logical OR between expressions |
+| Space | Logical AND (both required) |
+| `()` | Grouping for complex expressions |
+| `-` | Negation/exclusion |
+
+### Query limits
+
+| Access | Characters |
+|--------|-----------|
+| API (self-serve) | 512 (recent) / 1,024 (full archive) |
+| API (enterprise) | 4,096 |
+
+### Complete examples
 
 ```bash
 # First bitcoin mention from a specific account
@@ -124,13 +202,14 @@ python3 scripts/seed-post.py "AI agents has:links"
 # First English mention, excluding a related term
 python3 scripts/seed-post.py "quantum computing lang:en -crypto"
 
-# First mention with at least some engagement
+# First mention with engagement
 python3 scripts/seed-post.py "psyop min_replies:3"
+
+# First verified post on a topic
+python3 scripts/seed-post.py "bitcoin is:verified"
 ```
 
 Note: `since:` and `until:` are handled internally by the `--after`/`--before` flags. Don't include them in your query — use the flags instead.
-
-For the full list of X search operators, see [X's search page](https://x.com/search-advanced) or the [unofficial operator reference](https://github.com/steipete/bird).
 
 ## License
 
