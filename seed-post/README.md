@@ -25,7 +25,7 @@ python3 scripts/seed-post.py "bitcoin"
 | `--graph` / `-g` | Show growth timeline (mention frequency over time) |
 | `--annual` | Calendar-year growth windows (for long-running terms) |
 | `--window 30d` | Custom window size: `7d`, `30d`, `3m`, `1y` |
-| `--shares N` | Show first N tweets/mentions after the seed post |
+| `--shares N` | Show first N early mentions after the seed post |
 | `--after 2020-01-01` | Only search after this date |
 | `--before 2021-01-01` | Only search before this date |
 | `--json` / `-j` | Raw JSON output (machine-readable) |

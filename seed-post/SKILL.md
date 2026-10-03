@@ -101,7 +101,7 @@ Arguments:
   --before     Only search before this date (YYYY-MM-DD, exclusive)
   --window     Growth window duration: '7d', '30d', '3m', '1y', etc.
   --annual     Calendar-year growth windows (for long-running terms)
-  --shares N   Show first N tweets/mentions after the seed post (early spread)
+  --shares N   Show first N early mentions after the seed post
   --install    Install @steipete/bird dependency if missing
 ```
 
