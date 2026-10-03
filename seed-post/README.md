@@ -2,7 +2,7 @@
 
 Find the first-ever mention of any phrase on X/Twitter.
 
-![seed-post card](card.svg)
+![seed-post card](card.png)
 
 ## Quick start
 

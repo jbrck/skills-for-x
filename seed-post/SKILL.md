@@ -4,7 +4,7 @@ description: "Find the first-ever mention of any phrase on X/Twitter using archi
 author: https://github.com/jbrck
 license: MIT
 platforms: [linux, macos]
-card: card.svg
+card: card.png
 prerequisites:
   commands: [node, python3]
   env_file: .env (AUTH_TOKEN, CT0)
