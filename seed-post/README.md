@@ -61,6 +61,77 @@ python3 scripts/seed-post.py "bitcoin"
 
 The script uses X's internal GraphQL API (via `@steipete/bird`) to search the full archive back to 2006. It binary-chops by year → month → day, filters exact matches client-side, and returns the chronologically first post. The growth scan probes time windows from the OG post date to today. The early mentions scan finds who picked up the term in the week after the seed post.
 
+## X search operators
+
+Seed-post passes your query directly to X's GraphQL API. You can include any X search operator in your phrase to narrow results.
+
+### Filter by account
+
+| Operator | Example | What it does |
+|----------|---------|-------------|
+| `from:username` | `from:halfin bitcoin` | Posts from a specific user |
+| `to:username` | `to:halfin bitcoin` | Posts replying to a specific user |
+| `@username` | `@halfin bitcoin` | Posts mentioning a specific user |
+
+### Filter by content type
+
+| Operator | Example | What it does |
+|----------|---------|-------------|
+| `has:images` | `bitcoin has:images` | Posts with images |
+| `has:videos` | `bitcoin has:videos` | Posts with videos |
+| `has:media` | `bitcoin has:media` | Posts with any media |
+| `has:links` | `bitcoin has:links` | Posts containing a link |
+| `has:hashtags` | `bitcoin has:hashtags` | Posts with hashtags |
+| `has:mentions` | `bitcoin has:mentions` | Posts with @mentions |
+| `-` (minus) | `bitcoin -ethereum` | Exclude posts matching a term |
+| `lang:LANG` | `bitcoin lang:en` | Posts in a specific language |
+
+### Filter by engagement
+
+| Operator | Example | What it does |
+|----------|---------|-------------|
+| `min_replies:N` | `bitcoin min_replies:10` | Posts with at least N replies |
+| `min_likes:N` | `bitcoin min_likes:50` | Posts with at least N likes |
+| `min_retweets:N` | `bitcoin min_retweets:5` | Posts with at least N retweets |
+
+### Filter by URL
+
+| Operator | Example | What it does |
+|----------|---------|-------------|
+| `url:domain.com` | `bitcoin url:coinbase.com` | Posts containing a link to a domain |
+
+### Examples with operators
+
+```bash
+# First bitcoin mention from a specific account
+python3 scripts/seed-post.py "bitcoin from:halfin"
+
+# Exact phrase + required word
+python3 scripts/seed-post.py '"voting machine" tampering'
+
+# OR queries
+python3 scripts/seed-post.py '"voting machine" OR "election fraud"'
+
+# With negative terms
+python3 scripts/seed-post.py '"voting machine" -paper'
+
+# With operators
+python3 scripts/seed-post.py '"voting machine" tampering has:links'
+
+# First mention with a link
+python3 scripts/seed-post.py "AI agents has:links"
+
+# First English mention, excluding a related term
+python3 scripts/seed-post.py "quantum computing lang:en -crypto"
+
+# First mention with at least some engagement
+python3 scripts/seed-post.py "psyop min_replies:3"
+```
+
+Note: `since:` and `until:` are handled internally by the `--after`/`--before` flags. Don't include them in your query — use the flags instead.
+
+For the full list of X search operators, see [X's search page](https://x.com/search-advanced) or the [unofficial operator reference](https://github.com/steipete/bird).
+
 ## License
 
 MIT
