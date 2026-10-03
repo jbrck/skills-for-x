@@ -135,6 +135,27 @@ def run_bird(query: str, count: int, auth: str, ct0: str) -> list:
     return []
 
 
+def run_bird_replies(tweet_id: str, auth: str, ct0: str, count: int = 20) -> list:
+    """Get replies to a tweet via bird replies command.
+    Returns up to `count` replies sorted chronologically.
+    """
+    cmd = [
+        str(BIRD_BIN), "--auth-token", auth, "--ct0", ct0,
+        "replies", tweet_id, "--json", "--max-pages", "2"
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+        data = json.loads(result.stdout)
+        tweets = data.get("tweets", [])
+    except (json.JSONDecodeError, subprocess.TimeoutExpired, KeyError):
+        return []
+
+    tweets.sort(key=lambda t: t.get("createdAt", ""))
+    return tweets[:count]
+
+
 def exact_match(phrase: str, tweet: dict) -> bool:
     """Case-insensitive exact substring check."""
     return phrase.lower() in tweet.get("text", "").lower()
@@ -469,6 +490,67 @@ def format_growth(windows: list) -> str:
     return "\n".join(lines)
 
 
+def fetch_early_shares(tweet_id: str, tweet_created_at: str,
+                       phrase: str, auth: str, ct0: str,
+                       max_shares: int = 5) -> list:
+    """Fetch early replies to the seed post within 7 days of its creation.
+    Returns list of tweet dicts sorted chronologically, up to max_shares.
+    """
+    time.sleep(QUERY_DELAY)
+    replies = run_bird_replies(tweet_id, auth, ct0, count=max_shares + 10)
+    if not replies:
+        return []
+
+    # Parse seed post timestamp, calculate 7-day window
+    seed_dt = parse_timestamp(tweet_created_at)
+    week_later = seed_dt + datetime.timedelta(days=7)
+
+    # Filter to replies within the first 7 days
+    early = []
+    for t in replies:
+        try:
+            t_dt = parse_timestamp(t["createdAt"])
+            if t_dt <= week_later and t["id"] != tweet_id:
+                early.append(t)
+        except (KeyError, ValueError):
+            continue
+        if len(early) >= max_shares:
+            break
+    return early
+
+
+def format_early_shares(shares: list) -> str:
+    """Format early shares as a compact card."""
+    if not shares:
+        return ""
+    card = []
+    card.append("╔══════════════════════════════════════════════════════╗")
+    card.append("║  EARLY SHARES    first to engage                    ║")
+    card.append("╠══════════════════════════════════════════════════════╣")
+    for i, t in enumerate(shares, 1):
+        author = t.get("author", {})
+        username = author.get("username", "?")
+        text = t.get("text", "").replace("\n", " ")[:80]
+        created = t.get("createdAt", "?")
+        card.append(f"║  {i}. @{username:<35s}           ║")
+        card.append(f"║     {created:<44s} ║")
+        # Wrap text
+        words = text.split()
+        line = ""
+        for w in words:
+            if len(line) + len(w) + 1 > 44:
+                card.append(f"║     {line:<44s} ║")
+                line = w
+            else:
+                line = (line + " " + w).strip()
+        if line:
+            card.append(f"║     {line:<44s} ║")
+        if i < len(shares):
+            card.append("╠══════════════════════════════════════════════════════╣")
+    card.append("╚══════════════════════════════════════════════════════╝")
+    return "\n".join(card)
+
+
 # ── Main pipeline ─────────────────────────────────────────────────────
 
 def find_seed_post(phrase: str, auth: str, ct0: str,
@@ -476,10 +558,12 @@ def find_seed_post(phrase: str, auth: str, ct0: str,
                    after_date: str | None = None,
                    before_date: str | None = None,
                    window_days: int | None = None,
-                   annual: bool = False) -> dict:
+                   annual: bool = False,
+                   shares_count: int = 0) -> dict:
     """Full pipeline. Returns result dict.
 
     Supports --after, --before bounds and --window/--annual for growth.
+    When shares_count > 0, also fetches early replies to the seed post.
     """
     print(f"🔎 Searching for first mention of \"{phrase}\" on X", file=sys.stderr)
 
@@ -543,8 +627,18 @@ def find_seed_post(phrase: str, auth: str, ct0: str,
                                   window_days=window_days,
                                   annual=annual)
 
+    shares_data = None
+    if shares_count > 0:
+        print(file=sys.stderr)
+        print(f"Phase 7: Early shares (first {shares_count})", file=sys.stderr)
+        shares_data = fetch_early_shares(
+            first_tweet["id"], first_tweet["createdAt"],
+            phrase, auth, ct0, max_shares=shares_count)
+        print(f"  → Found {len(shares_data)} early share{'s' if len(shares_data)!=1 else ''}",
+              file=sys.stderr)
+
     return {"found": True, "phrase": phrase, "og_post": first_tweet,
-            "growth": growth_data}
+            "growth": growth_data, "early_shares": shares_data}
 
 
 def main():
@@ -565,6 +659,8 @@ def main():
                         help="Growth window duration: '7d', '30d', '3m', '1y' etc.")
     parser.add_argument("--annual", action="store_true",
                         help="Annual growth windows (calendar years from OG post)")
+    parser.add_argument("--shares", type=int, default=0, metavar="N",
+                        help="Show first N early shares/replies to the seed post (default: off)")
 
     args = parser.parse_args()
     phrase = args.phrase.strip()
@@ -609,12 +705,15 @@ def main():
     result = find_seed_post(phrase, auth, ct0, growth=args.graph,
                             after_date=args.after, before_date=args.before,
                             window_days=window_days,
-                            annual=args.annual)
+                            annual=args.annual,
+                            shares_count=args.shares)
 
     if args.json:
         print(json.dumps(result, indent=2, default=str))
     elif result.get("found"):
         print(format_og_post(result["og_post"]))
+        if result.get("early_shares"):
+            print(format_early_shares(result["early_shares"]))
         if result.get("growth"):
             print(format_growth(result["growth"]))
     else:
