@@ -510,7 +510,7 @@ def format_early_shares(shares: list) -> str:
         return ""
     card = []
     card.append("╔══════════════════════════════════════════════════════╗")
-    card.append("║  FIRST RETWEETS   who picked it up next              ║")
+    card.append("║  TWEETS & EARLY MENTIONS                            ║")
     card.append("╠══════════════════════════════════════════════════════╣")
     for i, t in enumerate(shares, 1):
         author = t.get("author", {})
@@ -615,11 +615,11 @@ def find_seed_post(phrase: str, auth: str, ct0: str,
     shares_data = None
     if shares_count > 0:
         print(file=sys.stderr)
-        print(f"Phase 7: Early retweets (first {shares_count})", file=sys.stderr)
+        print(f"Phase 7: Tweets & early mentions (first {shares_count})", file=sys.stderr)
         shares_data = fetch_early_shares(
             first_tweet["id"], first_tweet["createdAt"],
             phrase, auth, ct0, max_shares=shares_count)
-        print(f"  → Found {len(shares_data)} early retweet{'s' if len(shares_data)!=1 else ''}",
+        print(f"  → Found {len(shares_data)} early mention{'s' if len(shares_data)!=1 else ''}",
               file=sys.stderr)
 
     return {"found": True, "phrase": phrase, "og_post": first_tweet,
