@@ -26,6 +26,8 @@ Standalone tools for mining X/Twitter's full archive via the [@steipete/bird](ht
 
 **Political and election researchers** — trace when a slogan, hashtag, or narrative entered the timeline.
 
+**Psyop and disinformation researchers** — identify patient zero of a coordinated narrative. Pinpoint when a planted talking point first appeared and measure how long before it hit mainstream.
+
 **Trademark litigators** — need hard timestamps at scale. The X archive carries weight in filings, and the billable tolerance for tool setup is low.
 
 ## Requirements
