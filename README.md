@@ -6,7 +6,7 @@ Standalone tools for mining X/Twitter's full archive via the [@steipete/bird](ht
 
 | Skill | What it does |
 |-------|-------------|
-| [seed-post](seed-post/) | Find the first-ever mention of any phrase on X — binary-chop archive search + growth timeline |
+| [seed-post](seed-post/) | Find the first-ever mentions of any phrase on X — binary-chop archive search + growth timeline |
 
 ![seed-post card](seed-post/card.svg)
 
