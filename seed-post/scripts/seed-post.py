@@ -183,11 +183,17 @@ def today_utc() -> datetime.datetime:
 
 # ── Core: Binary-chop date search ─────────────────────────────────────
 
+def is_compound_query(phrase: str) -> bool:
+    """Check if phrase contains search operators that break exact-phrase wrapping."""
+    operators = {'"', 'OR', 'AND', '-', 'from:', 'to:', 'url:', 'lang:', 'has:'}
+    return any(op in phrase for op in operators)
+
+
 def probe_range(phrase: str, since_str: str, until_str: str,
                 auth: str, ct0: str) -> int:
     """Return result count for phrase in a date range. 0 = none/error."""
     time.sleep(QUERY_DELAY)
-    query = f'"{phrase}" {since_str} {until_str}'
+    query = (f'"{phrase}"' if not is_compound_query(phrase) else phrase) + f' {since_str} {until_str}'
     results = run_bird(query, BIRD_SEARCH_MIN_COUNT, auth, ct0)
     return len(results) if results else 0
 
@@ -266,7 +272,7 @@ def fetch_day_tweets(phrase: str, year: int, month: int, day: int,
     time.sleep(QUERY_DELAY)
     until_dt = datetime.date(year, month, day) + datetime.timedelta(days=1)
     query = (
-        f'"{phrase}" '
+        f'"{phrase}" ' if not is_compound_query(phrase) else f'{phrase} '
         f"since:{year}-{month:02d}-{day:02d} "
         f"until:{until_dt.year}-{until_dt.month:02d}-{until_dt.day:02d}"
     )
@@ -357,7 +363,8 @@ def scan_growth(phrase: str, first_date: datetime.datetime,
     results = []
     for label, since_dt, until_dt in windows:
         print(f"  {label}... ", end="", file=sys.stderr, flush=True)
-        query = f'"{phrase}" since:{fmt_date(since_dt)} until:{fmt_date(until_dt)}'
+        prefix = f'"{phrase}"' if not is_compound_query(phrase) else phrase
+        query = f'{prefix} since:{fmt_date(since_dt)} until:{fmt_date(until_dt)}'
         tweets = run_bird(query, GScan, auth, ct0)
         count = len(tweets)
         print(f"{count} posts", file=sys.stderr)
@@ -483,9 +490,9 @@ def fetch_early_shares(tweet_id: str, tweet_created_at: str,
     week_later = seed_dt + datetime.timedelta(days=7)
 
     time.sleep(QUERY_DELAY)
+    prefix = f'"{phrase}" ' if not is_compound_query(phrase) else f'{phrase} '
     query = (
-        f'"{phrase}" '
-        f"since:{fmt_date(day_after)} "
+        f"{prefix}since:{fmt_date(day_after)} "
         f"until:{fmt_date(week_later)}"
     )
     results = run_bird(query, 30, auth, ct0)
