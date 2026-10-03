@@ -91,7 +91,7 @@ The script checks for `@steipete/bird` in `node_modules/.bin/bird` on every run.
 ## Usage
 
 ```
-python3 scripts/seed-post.py <phrase> [--graph] [--json]
+python3 scripts/seed-post.py <phrase> [--graph] [--annual] [--shares N] [--json]
 
 Arguments:
   phrase       The exact phrase to search for (case-insensitive)
@@ -100,7 +100,9 @@ Arguments:
   --after      Only search after this date (YYYY-MM-DD, inclusive)
   --before     Only search before this date (YYYY-MM-DD, exclusive)
   --window     Growth window duration: '7d', '30d', '3m', '1y', etc.
-  --install    Auto-install @steipete/bird if missing
+  --annual     Calendar-year growth windows (for long-running terms)
+  --shares N   Show first N replies to the seed post (early engagement)
+  --install    Install @steipete/bird dependency if missing
 ```
 
 ### Examples
