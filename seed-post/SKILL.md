@@ -174,14 +174,11 @@ Early years show the real count. Once mentions far exceed what X returns per que
 The phrase isn't limited to exact-match. Pass compound queries using X's search syntax:
 
 ```bash
-# Exact phrase + required word
-python3 scripts/seed-post.py '"voting machine" tampering'
-
-# OR across related terms — find the origin of any of them
-python3 scripts/seed-post.py '"voting machine" OR "election fraud" OR "irregularities"'
+# Exact phrase + related terms with OR
+python3 scripts/seed-post.py '"voting machine" tampering OR hack OR hijack'
 
 # With negative terms — exclude noisy results
-python3 scripts/seed-post.py '"voting machine" -paper -audit'
+python3 scripts/seed-post.py '"voting machine" tampering -audit -paper'
 
 # Using from:, has:, url:, lang: and other X operators
 python3 scripts/seed-post.py '"voting machine" has:links'
