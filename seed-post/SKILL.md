@@ -169,6 +169,26 @@ python3 scripts/seed-post.py "bitcoin" --graph --annual
 
 Early years show the real count. Once mentions far exceed what X returns per query, the table collapses the saturated years into a single row with a "+" label. The script still queries every window — the display just trims the repeats for readability.
 
+#### Search operators
+
+The phrase isn't limited to exact-match. Pass compound queries using X's search syntax:
+
+```bash
+# Exact phrase + required word
+python3 scripts/seed-post.py '"voting machine" tampering'
+
+# OR across related terms — find the origin of any of them
+python3 scripts/seed-post.py '"voting machine" OR "election fraud" OR "irregularities"'
+
+# With negative terms — exclude noisy results
+python3 scripts/seed-post.py '"voting machine" -paper -audit'
+
+# Using from:, has:, url:, lang: and other X operators
+python3 scripts/seed-post.py '"voting machine" has:links'
+```
+
+When the phrase contains `"`, `OR`, `AND`, `-`, or any search operator (`from:`, `to:`, `url:`, `lang:`, `has:`), the script passes it through directly instead of wrapping in exact-match quotes. Everything else — `--graph`, `--shares`, `--annual`, date bounds — works the same.
+
 #### Get raw JSON
 
 ```bash
