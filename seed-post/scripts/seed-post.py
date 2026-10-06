@@ -200,23 +200,31 @@ def probe_range(phrase: str, since_str: str, until_str: str,
 
 def find_earliest_year(phrase: str, auth: str, ct0: str,
                        start_year: int = X_LAUNCH_YEAR,
-                       end_year: int | None = None) -> int:
-    """Walk backward from end_year to start_year to find earliest year."""
+                       end_year: int | None = None) -> int | None:
+    """Binary-chop forward through years to find earliest with results.
+    Handles discontinuous mentions — gaps don't break the search.
+    """
     if end_year is None:
         end_year = today_utc().year
-    earliest = end_year
 
-    for year in range(end_year, start_year - 1, -1):
+    # First check if the term exists at all
+    print(f"  Checking {start_year}-{end_year} range... ", end="", file=sys.stderr, flush=True)
+    total = probe_range(phrase,
+        f"since:{start_year}-01-01", f"until:{end_year + 1}-01-01", auth, ct0)
+    print(f"({total})", file=sys.stderr)
+    if total == 0:
+        return None
+
+    # Linear scan from start_year — for gap-prone terms this is more reliable
+    # than binary chop, and the year scan is at most ~20 queries
+    for year in range(start_year, end_year + 1):
         print(f"  Checking {year}... ", end="", file=sys.stderr, flush=True)
         count = probe_range(phrase,
             f"since:{year}-01-01", f"until:{year + 1}-01-01", auth, ct0)
         print(f"({'✅' if count > 0 else '❌'}) ({count})", file=sys.stderr)
         if count > 0:
-            earliest = year
-        elif year < end_year:
-            return year + 1
-
-    return earliest
+            return year
+    return end_year
 
 
 def find_earliest_month(phrase: str, year: int, auth: str, ct0: str) -> int:
@@ -584,6 +592,9 @@ def find_seed_post(phrase: str, auth: str, ct0: str,
 
     print("Phase 2: Binary-chop — earliest year", file=sys.stderr)
     year = find_earliest_year(phrase, auth, ct0, start_year=start_year, end_year=end_year)
+    if year is None:
+        print("  → No results found in any year.", file=sys.stderr)
+        return {"found": False, "phrase": phrase, "reason": "no_results"}
     print(f"  → Earliest year: {year}", file=sys.stderr)
 
     print("Phase 3: Earliest month", file=sys.stderr)
@@ -595,7 +606,14 @@ def find_seed_post(phrase: str, auth: str, ct0: str,
     print(f"  → Earliest day: {year}-{month:02d}-{day:02d}", file=sys.stderr)
 
     print("Phase 5: Finding the OG post", file=sys.stderr)
+    print(f"  DEBUG: fetch_day_tweets({phrase!r}, year={year}, month={month}, day={day})",
+          file=sys.stderr)
     tweets = fetch_day_tweets(phrase, year, month, day, auth, ct0)
+    print(f"  DEBUG: got {len(tweets)} tweets", file=sys.stderr)
+    if tweets:
+        for t in tweets[:2]:
+            print(f"  DEBUG: @{t.get('author',{}).get('username','?')} ({t.get('createdAt','?')}): {t.get('text','')[:80]}",
+                  file=sys.stderr)
     if not tweets:
         print("  No tweets returned for that day.", file=sys.stderr)
         return {"found": False, "phrase": phrase, "reason": "no_tweets_from_api"}

@@ -2,7 +2,7 @@
 
 Find the first-ever mentions of any phrase on X/Twitter — binary-chop archive search + growth timeline + early mentions.
 
-![seed-post card](card.png)
+![Seed post in terminal output — the first bitcoin tweet by @halfin on Jan 11, 2009 at 03:33 UTC. Shows the tweet card, growth timeline bar chart, and early mentions section. Black background, white/green terminal aesthetic.](card.png)
 
 ## Who is this for
 
