@@ -19,13 +19,13 @@ Given any phrase, **seed-post** finds the earliest mention on X/Twitter by searc
 X's internal GraphQL search (accessed via the `@steipete/bird` npm CLI) supports `since:` and `until:` date operators that reach back to X's launch in 2006. seed-post uses this to:
 
 1. **Probe existence** — is the phrase on X at all?
-2. **Binary-chop years** — walk backward from the current year to find the earliest year with mentions
+2. **Sweep 6-month windows** — probe consecutive half-year windows forward from 2006 to find the earliest window with mentions
 3. **Binary-chop months** — within that year, find the earliest month
 4. **Binary-chop days** — within that month, find the earliest day
 5. **Fetch and filter** — get all tweets from that day, filter for exact substring matches, return the chronologically first
 6. **Growth scan** (optional) — scan successive time windows to show mention-frequency growth
 
-The entire search runs in under 60 seconds for most phrases.
+The search runs in under 60 seconds for most phrases when a rough time bound is given; a full-archive scan of a term that started years after launch is slower (one probe per 6-month window, ~2.5s apart).
 
 ## Setup
 
@@ -116,19 +116,16 @@ python3 scripts/seed-post.py "bitcoin"
 
 Output:
 ```
-────────────────────────────────────────────────────────────
-  SEED POST FOUND
-────────────────────────────────────────────────────────────
-
-  Author:    @halfin (halfin)
-  Date:      Sun Jan 11 03:33:52 +0000 2009
-  Link:      https://x.com/halfin/status/1110302988
-
-  Running bitcoin
-
-  ❤️ 133332  ↻ 44383  💬 11706  👁 0
-
-────────────────────────────────────────────────────────────
+╔══════════════════════════════════════════════════════╗
+║  SEED POST FOUND   first mention of "bitcoin"         ║
+╠══════════════════════════════════════════════════════╣
+║  @halfin                                            ║
+║  Sun Jan 11 03:33:52 +0000 2009                     ║
+║  https://x.com/halfin/status/1110302988             ║
+╠══════════════════════════════════════════════════════╣
+║  Running bitcoin                                    ║
+║  ❤️ 133332  ↻ 44383  💬 11706  👁 0                  ║
+╚══════════════════════════════════════════════════════╝
 ```
 
 The phrase was first mentioned on X over **17 years ago**, by @halfin — one of the earliest people on the platform.
@@ -187,13 +184,44 @@ python3 scripts/seed-post.py '"voting machine" has:links'
 
 When the phrase contains `"`, `OR`, `AND`, `-`, or any search operator (`from:`, `to:`, `url:`, `lang:`, `has:`), the script passes it through directly instead of wrapping in exact-match quotes. Everything else — `--graph`, `--shares`, `--annual`, date bounds — works the same.
 
+#### Early mentions
+
+```bash
+python3 scripts/seed-post.py "bitcoin" --shares 5
+```
+
+Searches the 7 days after the seed post for anyone else who picked up the phrase — retweets, quote tweets, independent mentions. Shows who amplified the term first.
+
+#### Displaced candidates
+
+```bash
+python3 scripts/seed-post.py "bitcoin" --candidates 5
+```
+
+Logs the runner-up posts from the seed post's first day that the OG post displaced. Zero extra API calls — the data comes from the same day-fetch as the seed post.
+
 #### Get raw JSON
 
 ```bash
 python3 scripts/seed-post.py "bitcoin" --json
 ```
 
-Useful for piping into other tools or processing in scripts. The JSON includes `found`, `phrase`, `og_post`, and optionally `growth`:
+Useful for piping into other tools or processing in scripts. The JSON includes `found`, `phrase`, `og_post`, and optionally `growth`, `early_shares`, and `candidates`:
+
+### Interactive time-window prompt
+
+Run with no flags in a terminal and seed-post asks:
+
+```
+Do you know roughly when the term first appeared?
+  [1] No idea — scan the full archive (2006 to today)
+  [2] It was in a specific year (e.g. 2010)
+  [3] It was between two dates (e.g. 2008-03 to 2010-07)
+```
+
+Agents and scripts should NOT rely on the prompt — pass bounds explicitly instead. Any rough guess cuts the sweep dramatically. A term from 2020 found with `--after 2018-01-01` skips ~24 empty 6-month probes that a full-archive run spends before reaching the hit window.
+
+**Where the "earliest mention" asking comes from:** seed-post's whole job is answering "when was the first mention?" The prompt above is the only human interaction — it just asks *if the caller knows a rough window* to skip wasted probes. Default (full archive) is fine, just slower: ~35+ probes for a term that started in 2014, vs ~15 with a rough bound.
 
 ## Project structure
 
@@ -215,13 +243,11 @@ seed-post/
 ```
 Broad existence probed in one query
     ↓
-Year-level scan (current year → 2006, backward)
+6-month window sweep (2006 → forward, first hit)
     ↓
-Month-level scan within winning year
+Month-level binary chop within winning window
     ↓
 Day-level binary chop within winning month
-    ↓
-Linear backward scan to confirm first day
     ↓
 Fetch all tweets from the confirmed day
     ↓
@@ -276,4 +302,4 @@ MIT. This project uses `@steipete/bird` (npm CLI) for X GraphQL API access.
 ## Related
 
 This is part of the `skills-for-x` collection — standalone skills for X/Twitter.
-More at: https://github.com/jbrck/skills
+More at: https://github.com/jbrck/skills-for-x
