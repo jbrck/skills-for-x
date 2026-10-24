@@ -191,61 +191,167 @@ def is_compound_query(phrase: str) -> bool:
 
 def probe_range(phrase: str, since_str: str, until_str: str,
                 auth: str, ct0: str) -> int:
-    """Return result count for phrase in a date range. 0 = none/error."""
+    """Return VALIDATED result count for phrase in a date range.
+
+    0 = none/error. The GraphQL search falls back to random in-window
+    popular tweets when no real match exists in the range, so raw
+    len(results) is NOT a reliable signal. Every result is checked:
+      - date falls within the queried window (with 24h TZ slack on each
+        side — bird interprets since/until in the browser's timezone)
+      - text matches the phrase, when the query is a plain phrase
+    Only validated results count.
+    """
     time.sleep(QUERY_DELAY)
     query = (f'"{phrase}"' if not is_compound_query(phrase) else phrase) + f' {since_str} {until_str}'
     results = run_bird(query, BIRD_SEARCH_MIN_COUNT, auth, ct0)
-    return len(results) if results else 0
+    if not results:
+        return 0
+
+    # Parse the requested window (YYYY-MM-DD) and add TZ slack
+    since_parts = since_str.removeprefix("since:").split("-")
+    until_parts = until_str.removeprefix("until:").split("-")
+    win_lo = datetime.datetime(int(since_parts[0]), int(since_parts[1]), int(since_parts[2]),
+                               tzinfo=datetime.timezone.utc)
+    win_hi = datetime.datetime(int(until_parts[0]), int(until_parts[1]), int(until_parts[2]),
+                               tzinfo=datetime.timezone.utc)
+    slack = datetime.timedelta(hours=24)
+    check_phrase = not is_compound_query(phrase) and len(phrase) >= 2
+
+    count = 0
+    for t in results:
+        try:
+            created = parse_timestamp(t.get("createdAt", ""))
+        except (ValueError, IndexError, KeyError):
+            continue
+        if not (win_lo - slack <= created <= win_hi + slack):
+            continue
+        if check_phrase and not exact_match(phrase, t):
+            continue
+        count += 1
+    return count
 
 
 def find_earliest_year(phrase: str, auth: str, ct0: str,
                        start_year: int = X_LAUNCH_YEAR,
-                       end_year: int | None = None) -> int | None:
-    """Binary-chop forward through years to find earliest with results.
-    Handles discontinuous mentions — gaps don't break the search.
+                       end_year: int | None = None) -> tuple | None:
+    """Sweep 6-month windows to find the earliest year with matches.
+
+    bird's GraphQL search ranks by relevance+popularity INSIDE the
+    window. For windows wider than ~6 months, real but rare old matches
+    fall out of the top-N and the probe falsely returns 0 (verified: a
+    2009-01→2010-01 probe returns 0 for 'bitcoin' even though Jan 2009
+    has real hits; the same probe on 2009-01→2009-07 returns them).
+    Bi-directional chopping does NOT help — it's the API, not direction.
+
+    So the reliable primitive is a narrow-window sweep: probe consecutive
+    6-month windows from the start year, return the first window with a
+    validated hit. Then month/day chops run inside that ~6-month window,
+    where narrow probes are dependable.
+
+    Returns (year, month) of the first hit window, or None.
     """
     if end_year is None:
         end_year = today_utc().year
 
-    # First check if the term exists at all
-    print(f"  Checking {start_year}-{end_year} range... ", end="", file=sys.stderr, flush=True)
-    total = probe_range(phrase,
-        f"since:{start_year}-01-01", f"until:{end_year + 1}-01-01", auth, ct0)
-    print(f"({total})", file=sys.stderr)
-    if total == 0:
-        return None
-
-    # Linear scan from start_year — for gap-prone terms this is more reliable
-    # than binary chop, and the year scan is at most ~20 queries
-    for year in range(start_year, end_year + 1):
-        print(f"  Checking {year}... ", end="", file=sys.stderr, flush=True)
+    # Walk H1/H2 windows from start_year forward
+    win_start_y, win_start_m = start_year, 1
+    while win_start_y < end_year or (win_start_y == end_year and win_start_m == 1):
+        # window end: start + 6 months
+        win_end_y, win_end_m = win_start_y, win_start_m + 6
+        if win_end_m > 12:
+            win_end_y += 1
+            win_end_m -= 12
+        # clamp to the requested end_year
+        if win_end_y > end_year:
+            win_end_y, win_end_m = end_year + 1, 1
+        if win_start_y > end_year:
+            break
+        win_last = datetime.date(win_end_y, win_end_m, 1) - datetime.timedelta(days=1)
+        label = f"{win_start_y}-{win_start_m:02d}..{win_last.year}-{win_last.month:02d}"
+        print(f"  Sweep {label}... ", end="", file=sys.stderr, flush=True)
         count = probe_range(phrase,
-            f"since:{year}-01-01", f"until:{year + 1}-01-01", auth, ct0)
+            f"since:{win_start_y}-{win_start_m:02d}-01",
+            f"until:{win_end_y}-{win_end_m:02d}-01", auth, ct0)
         print(f"({'✅' if count > 0 else '❌'}) ({count})", file=sys.stderr)
         if count > 0:
-            return year
-    return end_year
+            print(f"  ✓ First hit window: {label}", file=sys.stderr)
+            return win_start_y, win_start_m
+        # advance by 6 months
+        win_start_m += 6
+        if win_start_m > 12:
+            win_start_y += 1
+            win_start_m -= 12
+    return None
+
+
+
+def find_earliest_month_window(phrase: str, start_ym: tuple, auth: str, ct0: str) -> tuple:
+    """Find the earliest (year, month) inside the hit window.
+
+    Binary chop over the flat month list between start_ym and +5 months.
+    The window is ≤6 months wide, so every probe is narrow and reliable.
+    """
+    y0, m0 = start_ym
+    # Candidate months: [start .. start+5]
+    months = []
+    y, m = y0, m0
+    for _ in range(6):
+        months.append((y, m))
+        m += 1
+        if m > 12:
+            y += 1
+            m = 1
+
+    lo, hi = 0, len(months) - 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        y_lo, m_lo = months[lo]
+        y_mid, m_mid = months[mid]
+        next_m = mid + 1
+        y_hi, m_hi = months[next_m] if next_m < len(months) else (y_mid, m_mid + 1)
+        if m_hi > 12:
+            y_hi, m_hi = y_mid + 1, 1
+        print(f"  Checking {y_lo}-{m_lo:02d}..{y_mid}-{m_mid:02d}... ",
+              end="", file=sys.stderr, flush=True)
+        left = probe_range(phrase,
+            f"since:{y_lo}-{m_lo:02d}-01", f"until:{y_hi}-{m_hi:02d}-01",
+            auth, ct0)
+        print(f"({'✅' if left > 0 else '❌'}) ({left})", file=sys.stderr)
+        if left > 0:
+            hi = mid
+        else:
+            lo = mid + 1
+    return months[lo]
 
 
 def find_earliest_month(phrase: str, year: int, auth: str, ct0: str) -> int:
-    """Find the earliest month in a year where the phrase appears."""
-    for month in range(1, 13):
-        next_m = month + 1
+    """Find the earliest month in a year where the phrase appears.
+
+    Existence-based binary chop over months: probe the [lo, mid] half;
+    if hits, recurse left, else fork right. ~4 probes instead of 12.
+    """
+    lo, hi = 1, 12
+    while lo < hi:
+        mid = (lo + hi) // 2
+        next_m = mid + 1
         until_y, until_m = (year + 1, 1) if next_m > 12 else (year, next_m)
-        print(f"  Checking {year}-{month:02d}... ", end="", file=sys.stderr, flush=True)
-        count = probe_range(phrase,
-            f"since:{year}-{month:02d}-01",
-            f"until:{until_y}-{until_m:02d}-01", auth, ct0)
-        print(f"({'✅' if count > 0 else '❌'}) ({count})", file=sys.stderr)
-        if count > 0:
-            return month
-    return 1
+        print(f"  Checking {year}-{lo:02d}..{mid:02d}... ", end="", file=sys.stderr, flush=True)
+        left = probe_range(phrase,
+            f"since:{year}-{lo:02d}-01", f"until:{until_y}-{until_m:02d}-01",
+            auth, ct0)
+        print(f"({'✅' if left > 0 else '❌'}) ({left})", file=sys.stderr)
+        if left > 0:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
 
 
 def find_earliest_day(phrase: str, year: int, month: int,
                       auth: str, ct0: str) -> int:
-    """Find earliest day with mentions via linear scan.
-    Month has at most 31 days — linear scan is reliable and fast enough.
+    """Find earliest day with mentions via existence-based binary chop.
+    Month has at most 31 days — a chop takes ~5 probes instead of 31,
+    which matters because every probe pays the 2.5s API delay.
     """
     if month == 12:
         days_in_month = 31
@@ -253,39 +359,82 @@ def find_earliest_day(phrase: str, year: int, month: int,
         next_m = datetime.date(year, month + 1, 1)
         days_in_month = (next_m - datetime.timedelta(days=1)).day
 
-    print(f"  Scanning {year}-{month:02d} day by day...", file=sys.stderr, flush=True)
-    for day in range(1, days_in_month + 1):
-        day_end = day + 1
-        if day_end <= days_in_month:
-            ck_y, ck_m, ck_d = year, month, day_end
-        elif month == 12:
-            ck_y, ck_m, ck_d = year + 1, 1, 1
+    def range_end(day: int) -> tuple:
+        """(y, m, d) of the day after `day` in the same month/year."""
+        if day < days_in_month:
+            return year, month, day + 1
+        if month == 12:
+            return year + 1, 1, 1
+        return year, month + 1, 1
+
+    print(f"  Chopping {year}-{month:02d} day range...", file=sys.stderr, flush=True)
+    lo, hi = 1, days_in_month
+    while lo < hi:
+        mid = (lo + hi) // 2
+        ey, em, ed = range_end(mid)
+        print(f"  Checking day {lo:02d}..{mid:02d}... ", end="", file=sys.stderr, flush=True)
+        left = probe_range(phrase,
+            f"since:{year}-{month:02d}-{lo:02d}", f"until:{ey}-{em:02d}-{ed:02d}",
+            auth, ct0)
+        print(f"({'✅' if left > 0 else '❌'}) ({left})", file=sys.stderr)
+        if left > 0:
+            hi = mid
         else:
-            ck_y, ck_m, ck_d = year, month + 1, 1
+            lo = mid + 1
 
-        count = probe_range(phrase,
-            f"since:{year}-{month:02d}-{day:02d}",
-            f"until:{ck_y}-{ck_m:02d}-{ck_d:02d}", auth, ct0)
-        if count > 0:
-            print(f"  > Earliest day: {year}-{month:02d}-{day:02d}",
-                  file=sys.stderr)
-            return day
-
-    return days_in_month  # fallback
+    print(f"  > Earliest day: {year}-{month:02d}-{lo:02d}", file=sys.stderr)
+    return lo
 
 
 def fetch_day_tweets(phrase: str, year: int, month: int, day: int,
                      auth: str, ct0: str) -> list:
-    """Fetch tweets for a phrase on a specific day."""
+    """Fetch tweets for a phrase on the resolved day.
+
+    Mirrors probe semantics: bird interprets since/until in the user's
+    browser timezone (≈UTC-8), so a tweet from Jan 11 03:33 UTC lands in
+    an until:Jan-10 window. A strict UTC filter therefore DROPS the very
+    tweet we want. Instead we accept whatever the windowed query returns,
+    exact-match it, and sort chronologically — the earliest is the OG.
+
+    Uses count=3 (probe count) + a count=60 sweep for older same-window
+    posts, then keeps posts whose createdAt is within ~2 days of the
+    resolved day (TZ slack) and exact-matches the phrase.
+    """
     time.sleep(QUERY_DELAY)
-    until_dt = datetime.date(year, month, day) + datetime.timedelta(days=1)
-    query = (
-        f'"{phrase}" ' if not is_compound_query(phrase) else f'{phrase} '
-        f"since:{year}-{month:02d}-{day:02d} "
-        f"until:{until_dt.year}-{until_dt.month:02d}-{until_dt.day:02d}"
-    )
-    results = run_bird(query, BIRD_SEARCH_MAX_COUNT, auth, ct0)
-    return results or []# ── Growth scan ───────────────────────────────────────────────────────
+    window = f"since:{year}-{month:02d}-{day:02d} " \
+             f"until:{fmt_date(datetime.date(year, month, day) + datetime.timedelta(days=1))}"
+    prefix = f'"{phrase}"' if not is_compound_query(phrase) else phrase
+
+    results: list = []
+    for count in (BIRD_SEARCH_MIN_COUNT, BIRD_SEARCH_MAX_COUNT):
+        page = run_bird(f"{prefix} {window}", count, auth, ct0)
+        if page:
+            results.extend(page)
+
+    # TZ-lenient window: resolved day minus 48h to plus 48h.
+    resolved = datetime.datetime(year, month, day, tzinfo=datetime.timezone.utc)
+    slack_lo = resolved - datetime.timedelta(hours=48)
+    slack_hi = resolved + datetime.timedelta(hours=168)
+
+    seen = set()
+    kept = []
+    for t in results:
+        tid = t.get("id")
+        if tid and tid in seen:
+            continue
+        if tid:
+            seen.add(tid)
+        try:
+            created = parse_timestamp(t.get("createdAt", ""))
+        except (ValueError, IndexError, KeyError):
+            continue
+        if slack_lo <= created <= slack_hi and exact_match(phrase, t):
+            kept.append(t)
+    kept.sort(key=lambda t: t.get("createdAt", ""))
+    return kept
+
+
+# ── Growth scan ───────────────────────────────────────────────────────
 
 def build_windows(first_date: datetime.datetime,
                   window_days: int | None = None,
@@ -551,6 +700,37 @@ def format_early_shares(shares: list) -> str:
     return "\n".join(card)
 
 
+def format_candidates(candidates: list) -> str:
+    """Format displaced runner-up candidates as a compact card."""
+    if not candidates:
+        return ""
+    card = []
+    card.append("╔══════════════════════════════════════════════════════╗")
+    card.append("║  DISPLACED CANDIDATES  found during the chop          ║")
+    card.append("╠══════════════════════════════════════════════════════╣")
+    for i, t in enumerate(candidates, 1):
+        author = t.get("author", {})
+        username = author.get("username", "?")
+        text = t.get("text", "").replace("\n", " ")[:80]
+        created = t.get("createdAt", "?")
+        card.append(f"║  {i}. @{username:<35s}           ║")
+        card.append(f"║     {created:<44s} ║")
+        words = text.split()
+        line = ""
+        for w in words:
+            if len(line) + len(w) + 1 > 44:
+                card.append(f"║     {line:<44s} ║")
+                line = w
+            else:
+                line = (line + " " + w).strip()
+        if line:
+            card.append(f"║     {line:<44s} ║")
+        if i < len(candidates):
+            card.append("╠══════════════════════════════════════════════════════╣")
+    card.append("╚══════════════════════════════════════════════════════╝")
+    return "\n".join(card)
+
+
 # ── Main pipeline ─────────────────────────────────────────────────────
 
 def find_seed_post(phrase: str, auth: str, ct0: str,
@@ -559,11 +739,14 @@ def find_seed_post(phrase: str, auth: str, ct0: str,
                    before_date: str | None = None,
                    window_days: int | None = None,
                    annual: bool = False,
-                   shares_count: int = 0) -> dict:
+                   shares_count: int = 0,
+                   candidates_count: int = 0) -> dict:
     """Full pipeline. Returns result dict.
 
     Supports --after, --before bounds and --window/--annual for growth.
-    When shares_count > 0, also fetches early replies to the seed post.
+    When shares_count > 0, also fetches early mentions after the seed post.
+    When candidates_count > 0, logs runner-up candidates found during the
+    final day fetch — posts the OG post displaced on the first day(s).
     """
     print(f"🔎 Searching for first mention of \"{phrase}\" on X", file=sys.stderr)
 
@@ -581,24 +764,17 @@ def find_seed_post(phrase: str, auth: str, ct0: str,
     hi = before_date or f"{end_year}-12-31"
     print(f"  Range: {lo} → {hi}", file=sys.stderr)
 
-    print("Phase 1: Existence check", file=sys.stderr)
-    since = f"since:{after_date}" if after_date else f"since:{start_year}-01-01"
-    until = f"until:{int(end_year) + 1}-01-01" if not before_date else f"until:{before_date}"
-    count = probe_range(phrase, since, until, auth, ct0)
-    if count == 0:
+    print("Phase 1+2: Semester sweep — existence + earliest window", file=sys.stderr)
+    hit = find_earliest_year(phrase, auth, ct0,
+                             start_year=start_year, end_year=end_year)
+    if hit is None:
         print(f"\n  No mentions of \"{phrase}\" found in that range.\n", file=sys.stderr)
         return {"found": False, "phrase": phrase}
-    print(f"  ✅ Found — at least {count} result{'s' if count != 1 else ''}", file=sys.stderr)
-
-    print("Phase 2: Binary-chop — earliest year", file=sys.stderr)
-    year = find_earliest_year(phrase, auth, ct0, start_year=start_year, end_year=end_year)
-    if year is None:
-        print("  → No results found in any year.", file=sys.stderr)
-        return {"found": False, "phrase": phrase, "reason": "no_results"}
-    print(f"  → Earliest year: {year}", file=sys.stderr)
+    year, month = hit
+    print(f"  → Earliest window starts: {year}-{month:02d}", file=sys.stderr)
 
     print("Phase 3: Earliest month", file=sys.stderr)
-    month = find_earliest_month(phrase, year, auth, ct0)
+    year, month = find_earliest_month_window(phrase, (year, month), auth, ct0)
     print(f"  → Earliest month: {year}-{month:02d}", file=sys.stderr)
 
     print("Phase 4: Earliest day", file=sys.stderr)
@@ -606,10 +782,24 @@ def find_seed_post(phrase: str, auth: str, ct0: str,
     print(f"  → Earliest day: {year}-{month:02d}-{day:02d}", file=sys.stderr)
 
     print("Phase 5: Finding the OG post", file=sys.stderr)
-    print(f"  DEBUG: fetch_day_tweets({phrase!r}, year={year}, month={month}, day={day})",
-          file=sys.stderr)
-    tweets = fetch_day_tweets(phrase, year, month, day, auth, ct0)
-    print(f"  DEBUG: got {len(tweets)} tweets", file=sys.stderr)
+    # The day chop can land on a false positive: the API sometimes returns
+    # an out-of-window relevance post for a since/until probe (count > 0,
+    # but no post actually lives on that day). Verify with a real fetch;
+    # if the day is empty, walk forward up to 120 days until the fetch
+    # returns in-window posts.
+    cur = datetime.date(year, month, day)
+    tweets = []
+    walk_days = 0
+    while walk_days <= 120:
+        print(f"  DEBUG: fetch_day_tweets({phrase!r}, y={cur.year}, m={cur.month}, d={cur.day})",
+              file=sys.stderr)
+        tweets = fetch_day_tweets(phrase, cur.year, cur.month, cur.day, auth, ct0)
+        print(f"  DEBUG: got {len(tweets)} tweets for {cur.isoformat()}", file=sys.stderr)
+        if tweets:
+            break
+        cur = cur + datetime.timedelta(days=1)
+        walk_days += 1
+
     if tweets:
         for t in tweets[:2]:
             print(f"  DEBUG: @{t.get('author',{}).get('username','?')} ({t.get('createdAt','?')}): {t.get('text','')[:80]}",
@@ -627,6 +817,15 @@ def find_seed_post(phrase: str, auth: str, ct0: str,
     first_tweet = exact[0]
     print(f"  ✅ @{first_tweet.get('author',{}).get('username','?')} — "
           f"{first_tweet.get('createdAt','?')}", file=sys.stderr)
+
+    candidates_data = None
+    if candidates_count > 0 and len(exact) > 1:
+        # The OG post displaced these — they're the runner-ups found
+        # during the same final fetch. No extra API calls.
+        candidates_data = exact[1:candidates_count + 1]
+        print(f"  → Kept {len(candidates_data)} displaced candidate"
+              f"{'s' if len(candidates_data) != 1 else ''} (from first fetch)",
+              file=sys.stderr)
 
     growth_data = None
     if growth:
@@ -648,13 +847,86 @@ def find_seed_post(phrase: str, auth: str, ct0: str,
               file=sys.stderr)
 
     return {"found": True, "phrase": phrase, "og_post": first_tweet,
-            "growth": growth_data, "early_shares": shares_data}
+            "growth": growth_data, "early_shares": shares_data,
+            "candidates": candidates_data}
+
+
+OPTIONS_TEXT = """\
+seed-post — find the first mention of any phrase on X/Twitter.
+
+Usage:
+  python3 seed-post.py <phrase> [options]
+
+Examples:
+  python3 seed-post.py "bitcoin"
+  python3 seed-post.py "bitcoin" --graph
+  python3 seed-post.py "bitcoin" --shares 5
+  python3 seed-post.py "bitcoin" --candidates 5
+  python3 seed-post.py "bitcoin" --after 2010-01-01 --before 2010-12-31
+
+Options:
+  --graph, -g       Show growth timeline (mentions over time)
+  --shares N        Show first N early mentions after the seed post
+  --candidates N    Log N displaced runner-up candidates found during the chop
+  --after DATE      Only search after this date (YYYY-MM-DD)
+  --before DATE     Only search before this date (YYYY-MM-DD)
+  --window DUR      Growth window size: '7d', '30d', '3m', '1y'
+  --annual          Annual growth windows (calendar years)
+  --json, -j        Output raw JSON (machine-readable)
+  --install         Install @steipete/bird dependency if missing
+  --help, -h        Show this help
+
+Run interactively with no flags and the tool will ask about a time window.
+"""
+
+
+def prompt_time_window() -> tuple[str | None, str | None]:
+    """Ask the user if they know a time window to search within.
+
+    Returns (after, before) — either may be None, which means
+    'no bound' for the full-archive scan. Interactive only.
+    """
+    print(file=sys.stderr)
+    print("Do you know roughly when the term first appeared?", file=sys.stderr)
+    print("  [1] No idea — scan the full archive (2006 to today)", file=sys.stderr)
+    print("  [2] It was in a specific year (e.g. 2010)", file=sys.stderr)
+    print("  [3] It was between two dates (e.g. 2008-03 to 2010-07)", file=sys.stderr)
+    print("  Enter 1-3 (default 1): ", end="", file=sys.stderr, flush=True)
+    choice = input().strip()
+
+    if choice == "2":
+        print("  Which year? (YYYY): ", end="", file=sys.stderr, flush=True)
+        yr = input().strip()
+        if re.match(r"^\d{4}$", yr):
+            return f"{yr}-01-01", f"{yr}-12-31"
+        print(f"  Invalid year '{yr}' — scanning full archive.", file=sys.stderr)
+        return None, None
+
+    if choice == "3":
+        print("  Start date (YYYY-MM-DD): ", end="", file=sys.stderr, flush=True)
+        after = input().strip()
+        print("  End date (YYYY-MM-DD): ", end="", file=sys.stderr, flush=True)
+        before = input().strip()
+        ok_after = bool(re.match(r"^\d{4}-\d{2}-\d{2}$", after)) if after else False
+        ok_before = bool(re.match(r"^\d{4}-\d{2}-\d{2}$", before)) if before else False
+        if ok_after and ok_before:
+            return after, before
+        if ok_after and not before:
+            return after, None
+        if ok_before and not after:
+            return None, before
+        print("  Invalid date format — scanning full archive.", file=sys.stderr)
+        return None, None
+
+    # choice 1 or anything unparseable → full archive
+    return None, None
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Find the first mention of a phrase on X/Twitter")
-    parser.add_argument("phrase", help="The exact phrase to search for")
+        description="Find the first mention of a phrase on X/Twitter",
+        add_help=True)
+    parser.add_argument("phrase", nargs="?", help="The exact phrase to search for")
     parser.add_argument("--graph", "-g", action="store_true",
                         help="Run growth scan (mention frequency over time windows)")
     parser.add_argument("--json", "-j", action="store_true",
@@ -670,11 +942,18 @@ def main():
     parser.add_argument("--annual", action="store_true",
                         help="Annual growth windows (calendar years from OG post)")
     parser.add_argument("--shares", type=int, default=0, metavar="N",
-                        help="Show first N early shares/replies to the seed post (default: off)")
+                        help="Show first N early mentions after the seed post (default: off)")
+    parser.add_argument("--candidates", type=int, default=0, metavar="N",
+                        help="Log up to N displaced runner-up candidates found during the chop (default: off)")
 
     args = parser.parse_args()
-    phrase = args.phrase.strip()
 
+    # No phrase → print friendly options and exit 0.
+    if not args.phrase:
+        print(OPTIONS_TEXT)
+        sys.exit(0)
+
+    phrase = args.phrase.strip()
     if len(phrase) < 2:
         print("error: phrase must be at least 2 characters", file=sys.stderr)
         sys.exit(1)
@@ -686,6 +965,11 @@ def main():
             print(f"error: --{flag} must be YYYY-MM-DD format, got '{val}'",
                   file=sys.stderr)
             sys.exit(1)
+
+    # If neither bound is set, ask if the user knows a time window.
+    # Interactive only — piping/CI skips the prompt and scans the full archive.
+    if not args.after and not args.before and sys.stdin.isatty():
+        args.after, args.before = prompt_time_window()
 
     # Parse --window
     window_days = None
@@ -716,12 +1000,15 @@ def main():
                             after_date=args.after, before_date=args.before,
                             window_days=window_days,
                             annual=args.annual,
-                            shares_count=args.shares)
+                            shares_count=args.shares,
+                            candidates_count=args.candidates)
 
     if args.json:
         print(json.dumps(result, indent=2, default=str))
     elif result.get("found"):
         print(format_og_post(result["og_post"]))
+        if result.get("candidates"):
+            print(format_candidates(result["candidates"]))
         if result.get("early_shares"):
             print(format_early_shares(result["early_shares"]))
         if result.get("growth"):

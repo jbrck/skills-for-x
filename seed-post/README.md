@@ -46,6 +46,7 @@ python3 scripts/seed-post.py "bitcoin"
 | `--annual` | Calendar-year growth windows (for long-running terms) |
 | `--window 30d` | Custom window size: `7d`, `30d`, `3m`, `1y` |
 | `--shares N` | Show first N early mentions after the seed post |
+| `--candidates N` | Log N displaced runner-up candidates found during the chop |
 | `--after 2020-01-01` | Only search after this date |
 | `--before 2021-01-01` | Only search before this date |
 | `--json` / `-j` | Raw JSON output (machine-readable) |

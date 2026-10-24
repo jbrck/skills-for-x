@@ -91,18 +91,19 @@ The script checks for `@steipete/bird` in `node_modules/.bin/bird` on every run.
 ## Usage
 
 ```
-python3 scripts/seed-post.py <phrase> [--graph] [--annual] [--shares N] [--json]
+python3 scripts/seed-post.py <phrase> [--graph] [--annual] [--shares N] [--candidates N] [--json]
 
 Arguments:
-  phrase       The exact phrase to search for (case-insensitive)
-  --graph, -g  Also run growth scan (mention frequency over time windows)
-  --json, -j   Output raw JSON (machine-readable)
-  --after      Only search after this date (YYYY-MM-DD, inclusive)
-  --before     Only search before this date (YYYY-MM-DD, exclusive)
-  --window     Growth window duration: '7d', '30d', '3m', '1y', etc.
-  --annual     Calendar-year growth windows (for long-running terms)
-  --shares N   Show first N early mentions after the seed post
-  --install    Install @steipete/bird dependency if missing
+  phrase           The exact phrase to search for (case-insensitive)
+  --graph, -g      Also run growth scan (mention frequency over time windows)
+  --json, -j       Output raw JSON (machine-readable)
+  --after          Only search after this date (YYYY-MM-DD, inclusive)
+  --before         Only search before this date (YYYY-MM-DD, exclusive)
+  --window         Growth window duration: '7d', '30d', '3m', '1y', etc.
+  --annual         Calendar-year growth windows (for long-running terms)
+  --shares N       Show first N early mentions after the seed post
+  --candidates N   Log N displaced runner-up candidates found during the chop
+  --install        Install @steipete/bird dependency if missing
 ```
 
 ### Examples
